@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Guilty Spark</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%234453C9'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='none' stroke='white' stroke-width='1.5'/%3E%3Ccircle cx='8' cy='8' r='1.8' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"><span class="eye"></span></div>
+      <b>Guilty Spark</b>
+    </div>
+    <nav class="nav" aria-label="Machines">
+      <div class="grouphead">Machines</div>
+      <div class="items" id="hosts"></div>
+    </nav>
+    <div class="grow"></div>
+    <div class="status" id="scanstatus"><span class="dot"></span><span>Connecting…</span></div>
+    <div class="side-keys">
+      <span><kbd>↵</kbd> open</span><span><kbd>⌫</kbd> up</span><span><kbd>x</kbd> mark</span><span><kbd>c</kbd> review</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="bar">
+      <nav class="trail" id="trail" aria-label="Path"></nav>
+      <div class="sp"></div>
+      <div class="seg" role="group" aria-label="Colour by">
+        <button class="segbtn" data-mode="kind" aria-pressed="true">Kind</button>
+        <button class="segbtn" data-mode="age" aria-pressed="false">Age</button>
+      </div>
+      <button class="btn icon" id="rescan" title="Take a snapshot now (r)">↻<span class="hide-sm"> Snapshot now</span></button>
+      <button class="btn primary" id="reviewbtn" disabled>Review<span id="markcount"></span></button>
+    </header>
+
+    <section class="verdict" id="verdict"></section>
+    <div class="legend" id="legend"></div>
+
+    <div class="body">
+      <div class="mapwrap">
+        <div class="map" id="map" tabindex="0" aria-label="Treemap"></div>
+        <div class="tip" id="tip" hidden></div>
+      </div>
+      <aside class="panel-col" id="panel">
+        <section class="card" id="selcard"></section>
+        <section class="card" id="diskcard"></section>
+        <section class="card" id="histcard"></section>
+        <section class="card" id="lookcard"></section>
+        <section class="card" id="markcard" hidden></section>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheettitle" id="sheet"></div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script src="/app.js"></script>
+</body>
+</html>

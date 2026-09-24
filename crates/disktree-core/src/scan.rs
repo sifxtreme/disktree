@@ -57,7 +57,22 @@ pub struct ScanOptions {
     pub dedup_hardlinks: bool,
     /// Whether children are ranked by bytes or by file count.
     pub metric: Metric,
+    /// Directories listed but never opened: they appear as unreadable,
+    /// unmeasured nodes. On macOS, opening a privacy-protected folder
+    /// without a grant raises a consent dialog per folder, so a scanner
+    /// that lacks Full Disk Access must not touch them at all.
+    pub exclude: Vec<PathBuf>,
+    /// Files smaller than this are summed into one leaf per directory
+    /// (named [`FOLDED_NAME`]) instead of kept as a node each. Totals stay
+    /// exact; only the names of small files are lost. A scan of millions of
+    /// files otherwise holds every one in memory (~300 bytes each). Files
+    /// with more than one link are never folded, so hardlink de-duplication
+    /// still sees them.
+    pub fold_below: Option<u64>,
 }
+
+/// The name of the leaf that holds a directory's folded small files.
+pub const FOLDED_NAME: &str = "(small files)";
 
 impl Default for ScanOptions {
     fn default() -> Self {
@@ -69,6 +84,8 @@ impl Default for ScanOptions {
             max_depth: None,
             dedup_hardlinks: true,
             metric: Metric::Bytes,
+            exclude: Vec::new(),
+            fold_below: None,
         }
     }
 }
@@ -311,6 +328,13 @@ impl WalkContext {
                 tree.name = name;
                 return Classified::Entry(tree);
             }
+            // By path, before anything opens the directory: opening it is
+            // what raises the dialog.
+            if self.options.exclude.iter().any(|skip| *skip == path) {
+                let mut unread = Node::directory(name);
+                unread.read_error = true;
+                return Classified::Entry(unread);
+            }
             if self.options.one_filesystem
                 && let Some(foreign) = self.foreign_mounts.get()
             {
@@ -508,6 +532,11 @@ fn walk(scope: &Scope<'_>, dir: &Arc<PendingDir>, context: &Arc<WalkContext>) {
     let mut subdirs: Vec<Arc<PendingDir>> = Vec::new();
     let mut leaves: Vec<Node> = Vec::new();
 
+    // DISK_TRACE=1 names each directory before it is opened: the way to
+    // find the one an open() blocks on (a consent dialog, a dead mount).
+    if trace_enabled() {
+        eprintln!("open {}", dir.path.display());
+    }
     match fs::read_dir(&dir.path) {
         Ok(entries) => {
             for entry in entries {
@@ -537,6 +566,10 @@ fn walk(scope: &Scope<'_>, dir: &Arc<PendingDir>, context: &Arc<WalkContext>) {
             context.progress.record_error(&dir.path, &error);
             dir.read_error.store(true, Ordering::Relaxed);
         }
+    }
+
+    if let Some(floor) = context.options.fold_below {
+        fold_small(&mut leaves, floor);
     }
 
     // A depth-limited scan still measures what is directly in the directory,
@@ -607,6 +640,27 @@ fn mark_duplicate_hardlinks(node: &mut Node, seen: &mut FxHashSet<(u64, u64)>) {
     }
 }
 
+fn fold_small(leaves: &mut Vec<Node>, floor: u64) {
+    let mut folded = Node::entry(FOLDED_NAME, NodeKind::File, 0);
+    folded.own_files = 0;
+    leaves.retain(|leaf| {
+        let small = leaf.kind == NodeKind::File
+            && leaf.inode.is_none()
+            && leaf.own_bytes < floor;
+        if small {
+            folded.own_bytes += leaf.own_bytes;
+            folded.own_files += leaf.own_files;
+            folded.modified = folded.modified.max(leaf.modified);
+        }
+        !small
+    });
+    if folded.own_files > 0 {
+        folded.bytes = folded.own_bytes;
+        folded.files = folded.own_files;
+        leaves.push(folded);
+    }
+}
+
 fn leaf_node(
     name: Box<str>,
     kind: NodeKind,
@@ -614,7 +668,11 @@ fn leaf_node(
     meta: &Metadata,
 ) -> Node {
     let mut node = Node::entry(name, kind, size);
-    node.inode = file_identity(meta);
+    // Only a file with another link can be double-counted, so only those
+    // carry an identity for de-duplication (and are never folded).
+    if link_count(meta) > 1 {
+        node.inode = file_identity(meta);
+    }
     node.modified = modified_seconds(meta);
     node
 }
@@ -682,6 +740,17 @@ fn file_identity(meta: &Metadata) -> Option<(u64, u64)> {
     Some((meta.dev(), meta.ino()))
 }
 
+#[cfg(unix)]
+fn link_count(meta: &Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt as _;
+    meta.nlink()
+}
+
+#[cfg(not(unix))]
+const fn link_count(_meta: &Metadata) -> u64 {
+    1
+}
+
 #[cfg(not(unix))]
 fn file_identity(_meta: &Metadata) -> Option<(u64, u64)> {
     None
@@ -719,6 +788,28 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folding_small_files_keeps_totals_exact() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dir = temp.path().join("d");
+        fs::create_dir(&dir).expect("mkdir");
+        for i in 0..20 {
+            fs::write(dir.join(format!("s{i}")), vec![1_u8; 5000]).expect("small");
+        }
+        fs::write(dir.join("big"), vec![1_u8; 3 << 20]).expect("big");
+        let plain = scan(temp.path(), ScanOptions::default()).expect("scan");
+        let folded = scan(
+            temp.path(),
+            ScanOptions { fold_below: Some(1 << 20), ..ScanOptions::default() },
+        )
+        .expect("scan");
+        assert_eq!(plain.bytes, folded.bytes);
+        assert_eq!(plain.files, folded.files);
+        let d = folded.child_named("d").expect("d");
+        assert_eq!(d.children.len(), 2, "big + one folded leaf");
+        assert_eq!(d.child_named(FOLDED_NAME).expect("folded").files, 20);
+    }
     use crate::tree::Metric;
     use std::fs;
     use tempfile::TempDir;
@@ -1072,4 +1163,9 @@ mod tests {
             );
         }
     }
+}
+
+fn trace_enabled() -> bool {
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var_os("DISK_TRACE").is_some())
 }
