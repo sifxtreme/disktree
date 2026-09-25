@@ -431,14 +431,18 @@ struct SelectionCard: View {
                     Button("Show in Finder") { showInFinder(path) }
                         .disabled(model.host != "local")
                     Button("Copy Path") { copyPath(path) }
+                    Spacer()
+                }
+                .controlSize(.small)
+                if !isRoot {
+                    // Its own row: three buttons and a menu do not fit the panel's width.
                     Menu("Copy Delete Command") {
                         Button(deleteCommand(path)) { copyCommand(deleteCommand(path)); model.show("Copied: \(deleteCommand(path))") }
                         Button("rm -rf (permanent)") { copyCommand(deleteCommand(path, permanent: true)); model.show("Copied a permanent delete command") }
                     }
+                    .controlSize(.small)
                     .fixedSize()
-                    Spacer()
                 }
-                .controlSize(.small)
             } else {
                 Text(s.node == nil ? "—" : "Nothing selected.").foregroundStyle(Theme.muted)
             }

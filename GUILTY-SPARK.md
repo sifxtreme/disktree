@@ -62,6 +62,7 @@ Every claim here has a command. A claim whose check has not been run reads UNVER
 | Snapper peak memory | `/usr/bin/time -l ~/.local/bin/disk-snap --dir /tmp/x` | 146 MB, 2.9M files, 19 s (2026-09-24) |
 | Snapshots run hourly on both machines | `sqlite3 ~/Library/Application\ Support/disk/disk.db "select datetime(taken_at,'unixepoch','localtime') from snapshots"` | hourly since 16:32 (laptop) and 16:45 (Forge), 2026-09-24. One laptop run took 40 min at load 138; launchd skips an hour rather than overlap. |
 | Full Disk Access survives rebuilds | `launchctl submit -l probe -- ~/.local/bin/disk-snap --probe` | true on both, after 4 rebuilds (2026-09-24) |
+| Copy Delete Command addresses exactly the chosen path | harness step `delete command quoting` (a path with spaces, quotes, `$` and backticks round-trips through `/bin/sh`) | pass 2026-09-24 |
 | Browser page works on desktop and phone, read-only | `PLAYWRIGHT=… node crates/disk-web/web-check.mjs` | 13/13 pass (2026-09-24) |
 | Growing fast and Came back are useful on real data | the week check: `curl -s 127.0.0.1:7321/api/h/local/suggest` after 7 days of snapshots | UNVERIFIED (needs history until 2026-10-01) |
 | Strict lints | `cargo clippy -p disk-web -p disktree-core --all-targets -- -D warnings` | 0 findings (2026-09-24). The upstream GPUI app was not built here (Linux only). |

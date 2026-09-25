@@ -16,7 +16,9 @@
 > - **Guilty Spark.app**: a native SwiftUI app. It has a Canvas treemap you click into
 >   and back out of, an inspector, and a **Clean up** page that ranks what to delete and
 >   why: safe to clear, growing fast, big and untouched, came back. Every suggestion
->   offers Show in Finder and Copy Path; the delete is yours. The same view is also a
+>   offers Show in Finder, Copy Path and **Copy Delete Command**: the owner's cleanup for
+>   a known cache (`npm cache clean --force`, `uv cache clean`, …) or `trash '<path>'`,
+>   for you to paste. The app never deletes anything itself. The same view is also a
 >   browser page at `http://127.0.0.1:7321`.
 > - **Core additions**: `ScanOptions::exclude` lists a directory without opening it.
 >   `ScanOptions::fold_below` sums small files and small directory subtrees into one
@@ -25,7 +27,7 @@
 >
 > ![Guilty Spark: a home directory as a treemap, with free space, the inspector and 7 days of history](assets/guilty-spark/map.png)
 >
-> | Clean up: what to delete, and why | Clicked into a folder | Dark |
+> | Clean up: what to delete, and why (each row: Finder, copy path, copy delete command) | Clicked into a folder | Dark |
 > |---|---|---|
 > | ![Clean up](assets/guilty-spark/cleanup.png) | ![Zoomed](assets/guilty-spark/zoom.png) | ![Dark](assets/guilty-spark/dark.png) |
 >
