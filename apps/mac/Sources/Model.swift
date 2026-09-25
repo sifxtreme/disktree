@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case map = "Map", cleanup = "Clean up"
+    case map = "Map", cleanup = "Clean up", memory = "Memory"
     var id: String { rawValue }
 }
 

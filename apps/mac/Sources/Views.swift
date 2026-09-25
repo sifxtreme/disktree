@@ -163,6 +163,8 @@ struct Detail: View {
         Group {
             if model.page == .cleanup {
                 CleanupView()
+            } else if model.page == .memory {
+                MemoryView()
             } else {
                 VStack(alignment: .leading, spacing: Theme.Space.md) {
                     Verdict()
@@ -670,6 +672,8 @@ func copyPath(_ path: String) {
 /// worth. Scaled to its own range (not zero-based) so a few GB of change is visible.
 struct Sparkline: View {
     let values: [Double]
+    /// The peak's label; values are bytes unless the caller says otherwise.
+    var label: (Double) -> String = { bytes(Int64($0)) }
 
     var body: some View {
         GeometryReader { geo in
@@ -695,7 +699,7 @@ struct Sparkline: View {
                     pts.dropFirst().forEach { p.addLine(to: $0) }
                 }
                 .stroke(Theme.accent, style: StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
-                Text(bytes(Int64(hi))).font(Theme.caption).foregroundStyle(Theme.muted)
+                Text(label(hi)).font(Theme.caption).foregroundStyle(Theme.muted)
             }
         }
     }

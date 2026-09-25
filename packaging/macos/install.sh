@@ -29,7 +29,7 @@ for bin in disk-web disk-snap disk-mem; do
   install -m 0755 "$src" "$bindir/$bin"
 done
 
-# $1 label, $2 program-arguments xml, $3 extra keys
+# $1 label, $2 program-arguments xml, $3 extra keys, $4 ProcessType (default Background)
 agent() {
   cat > "$agents/$1.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -39,7 +39,7 @@ agent() {
   <key>Label</key><string>$1</string>
   <key>ProgramArguments</key><array>$2</array>
   $3
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>${4:-Background}</string>
   <key>LowPriorityIO</key><true/>
   <key>Nice</key><integer>10</integer>
   <key>StandardOutPath</key><string>$HOME/Library/Logs/$1.log</string>
@@ -87,8 +87,9 @@ agent com.asif.disk-snap "<string>$bindir/disk-snap</string>" \
 agent com.asif.disk-web "$web" \
   "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>"
 # mem-guard's job, and more: sample every 5 min; alert on a change of state (local only).
+# Standard, not Background: at Background priority under load a sample took a minute, mostly in top.
 agent com.asif.disk-mem "$memory" \
-  "<key>StartInterval</key><integer>300</integer><key>RunAtLoad</key><true/>"
+  "<key>StartInterval</key><integer>300</integer><key>RunAtLoad</key><true/>" Standard
 
 "$bindir/disk-snap" --probe | sed 's/^/snapper (from this shell) /'
 echo "installed com.asif.disk-snap + com.asif.disk-web + com.asif.disk-mem ($kind)"

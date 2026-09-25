@@ -49,6 +49,8 @@ struct GuiltySparkApp: App {
                     .keyboardShortcut("1", modifiers: .command)
                 Button("Clean Up") { model.page = .cleanup }
                     .keyboardShortcut("2", modifiers: .command)
+                Button("Memory") { model.page = .memory }
+                    .keyboardShortcut("3", modifiers: .command)
             }
         }
 

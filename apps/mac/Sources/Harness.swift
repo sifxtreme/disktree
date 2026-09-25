@@ -120,6 +120,24 @@ final class HarnessRunner {
                        deleteCommand(NSHomeDirectory() + "/.npm/_cacache") == "npm cache clean --force")
             self.check("anything else goes to the Trash", deleteCommand("/tmp/x").hasPrefix("trash "))
         }
+        // Memory page: the latest sample loads, owners add up, and an owner opens its week.
+        let memory = MemoryStore.shared
+        await step("memory") {
+            self.model.page = .memory
+            await self.wait("memory sample loaded") { memory.top?.system != nil || memory.error != nil }
+            self.check("memory answers", memory.error == nil, memory.error ?? "")
+            let owners = memory.top?.owners ?? []
+            self.check("memory has owners", owners.count >= 5, "\(owners.count)")
+            self.check("owners are largest first", owners.map(\.footprintMb) == owners.map(\.footprintMb).sorted(by: >))
+            if let first = owners.first?.owner {
+                memory.select(first)
+                await self.wait("owner history loaded") { memory.series != nil }
+                self.check("owner history is that owner", memory.series?.owner == first, memory.series?.owner ?? "nil")
+            }
+        }
+        await sleep(0.6)
+        await shot("06b-memory")
+        memory.select(nil)
         model.page = .map
 
         // 6. Every other machine: loads, and says whether its snapshot is complete.
