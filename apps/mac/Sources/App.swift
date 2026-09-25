@@ -5,8 +5,16 @@ import SwiftUI
 // (launchd, hourly); removal guards live in disktree-core behind disk-web. One Window and one
 // MenuBarExtra, the same shape as Cortana's Mac client, so it can fold into Cortana later.
 
+/// Closing the window (⌘W, the red button) must hide it, not quit: the app lives in the menu bar
+/// and keeps polling. Without this AppKit terminated the app after its last window closed, a clean
+/// exit 0 that launchd (KeepAlive on unsuccessful exit) rightly did not undo (2026-09-25).
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
 @main
 struct GuiltySparkApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = SparkModel.shared
 
     init() {
