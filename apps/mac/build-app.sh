@@ -44,8 +44,39 @@ PLIST
 
 codesign -f -s "$identity" -o runtime --timestamp=none "$app"
 codesign -v "$app"
-mkdir -p "$HOME/Applications"
+# com.asif.disk-app keeps the menu-bar app running: it starts at login and launchd relaunches it
+# after a crash (an unsuccessful exit), but not after Quit (exit 0). ThrottleInterval spaces the
+# relaunches so a crash on launch cannot spin. The app counts its crash reports in the menu panel.
+label=com.asif.disk-app
+agent="$HOME/Library/LaunchAgents/$label.plist"
+uid=$(id -u)
+launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+mkdir -p "$HOME/Applications" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 pkill -x GuiltySpark 2>/dev/null || true
 rm -rf "$HOME/Applications/Guilty Spark.app"
 cp -R "$app" "$HOME/Applications/"
 echo "installed $HOME/Applications/Guilty Spark.app"
+
+cat > "$agent" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>$HOME/Applications/Guilty Spark.app/Contents/MacOS/GuiltySpark</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/$label.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/$label.log</string>
+</dict>
+</plist>
+PLIST
+# bootout returns before a running job has exited; bootstrap fails (error 5) until it has.
+for try in 1 2 3 4 5 6 7 8 9 10; do
+  launchctl bootstrap "gui/$uid" "$agent" 2>/dev/null && break
+  sleep 1
+done
+launchctl print "gui/$uid/$label" >/dev/null && echo "launched by $label (relaunches on crash)"

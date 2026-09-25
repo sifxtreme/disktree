@@ -32,6 +32,27 @@ struct HostState {
     var forward: [String] = []
 }
 
+/// The macOS crash reports for this app (`GuiltySpark-*.ips`), which the system writes on every abort.
+struct CrashReports {
+    var count = 0
+    var latest: URL?
+
+    static func recent(days: Double = 7) -> CrashReports {
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/DiagnosticReports")
+        let since = Date().addingTimeInterval(-days * 86_400)
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        var out = CrashReports()
+        var newest = Date.distantPast
+        for f in files where f.lastPathComponent.hasPrefix("GuiltySpark-") && f.pathExtension == "ips" {
+            let at = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            guard at > since else { continue }
+            out.count += 1
+            if at > newest { newest = at; out.latest = f }
+        }
+        return out
+    }
+}
+
 @MainActor
 final class SparkModel: ObservableObject {
     static let shared = SparkModel()
@@ -46,6 +67,10 @@ final class SparkModel: ObservableObject {
     @Published var page: Page = Page(rawValue: UserDefaults.standard.string(forKey: "page") ?? "") ?? .map
     @Published var serverUp = true
     @Published var toast: String?
+    /// Crash reports from the last 7 days, read once at launch. launchd relaunches the app after a
+    /// crash (com.asif.disk-app, KeepAlive on unsuccessful exit), so without this count a crash
+    /// loop would be invisible.
+    let crashes = CrashReports.recent()
 
     private var started = false
     private var startPath = UserDefaults.standard.string(forKey: "openPath")

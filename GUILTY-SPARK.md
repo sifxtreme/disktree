@@ -47,6 +47,10 @@ delete endpoint, measures memory (budget 150 MB), and takes window-only screensh
 tests a build before installing. Bugs it found are listed in the commit history; the worst was an
 intermittent crash on resize inside the system `.inspector` column, now a plain panel.
 
+`apps/mac/build-app.sh` also installs `com.asif.disk-app`, a LaunchAgent that starts the app at login
+and relaunches it after a crash (`KeepAlive` on unsuccessful exit, 30 s throttle), never after Quit.
+The menu panel counts crash reports from the last 7 days, so a relaunch loop stays visible.
+
 ## Verifying these claims
 
 Every claim here has a command. A claim whose check has not been run reads UNVERIFIED, never ✅.
@@ -57,8 +61,11 @@ Every claim here has a command. A claim whose check has not been run reads UNVER
 | Totals are exact with folding | `cargo test -p disktree-core folding` | pass 2026-09-24, 3 tests |
 | Folding keeps build output and `node_modules` recognisable | `cargo test -p disktree-core folding_keeps` | pass. Shown to fail without the fix. |
 | Growing fast names the directory, not its parents; Came back finds refills only; history thins after 14 days | `cargo test -p disk-web store::` | pass 2026-09-24, 7 tests |
-| The app works end to end, including resizing below the minimum | `apps/mac/harness/run.sh` (20+ checks, screenshots) | soak: 15/15 clean, no crash reports (2026-09-24); 18 in a row since the inspector fix, 9 of 9 crashed before it |
-| The app stays under 150 MB | same harness | 76–79 MB in the soak |
+| The app works end to end, including resizing below the minimum | `apps/mac/harness/run.sh` (20+ checks, screenshots) | soak: 15/15 clean, no crash reports (2026-09-24); 18 in a row since the inspector fix, 9 of 9 crashed before it. 2026-09-25: 6/6 clean on the installed build, no new reports |
+| The inspector change is what fixed the 2026-09-24 crash (`SplitViewChildController … didUpdateMinSize` → AppKit "more Update Constraints passes than views") | Harness against controls: `.inspector` restored; inspector and no `.windowResizability` clamp; the exact pre-fix commit b8ed325; b8ed325 during a live snapshot | UNVERIFIED. On 2026-09-25 **no build crashed**, including the pre-fix one (16 runs, 0 reports). Yesterday's crash depended on something not reproduced (load, swap at 7 GB, display setup). Both guards stay; relaunch-on-crash covers the rest |
+| The app comes back after a crash, and stays quit after Quit | `kill -ABRT <pid>`, wait 40 s, `pgrep`; then Quit and wait 40 s | pass 2026-09-25: new pid after the abort (`runs = 2`); after Quit, `last exit code = 0` and no relaunch |
+| Crashes are counted where you look | menu panel shows "Crashed N× in 7 days" from `~/Library/Logs/DiagnosticReports/GuiltySpark-*.ips` | code path run standalone 2026-09-25: 20, newest `…2026-09-25-121650.ips`. The panel itself: UNVERIFIED (not screenshotted) |
+| The app stays under 150 MB | same harness | 76–79 MB in the soak. 2026-09-25: 3 of ~25 runs over budget (173–194 MB), all during or after a live snapshot |
 | Snapper peak memory | `/usr/bin/time -l ~/.local/bin/disk-snap --dir /tmp/x` | 146 MB, 2.9M files, 19 s (2026-09-24) |
 | Snapshots run hourly on both machines | `sqlite3 ~/Library/Application\ Support/disk/disk.db "select datetime(taken_at,'unixepoch','localtime') from snapshots"` | hourly since 16:32 (laptop) and 16:45 (Forge), 2026-09-24. One laptop run took 40 min at load 138; launchd skips an hour rather than overlap. |
 | Full Disk Access survives rebuilds | `launchctl submit -l probe -- ~/.local/bin/disk-snap --probe` | true on both, after 4 rebuilds (2026-09-24) |

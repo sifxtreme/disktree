@@ -633,6 +633,15 @@ struct MenuPanel: View {
                 }
             }
             Divider()
+            if model.crashes.count > 0, let latest = model.crashes.latest {
+                HStack {
+                    Text("Crashed \(model.crashes.count)× in 7 days")
+                        .font(Theme.caption).foregroundStyle(Theme.warn)
+                    Spacer()
+                    Button("Show report") { showInFinder(latest.path) }
+                        .buttonStyle(.link).font(Theme.caption)
+                }
+            }
             HStack {
                 Button("Open Guilty Spark") {
                     openWindow(id: "main")
