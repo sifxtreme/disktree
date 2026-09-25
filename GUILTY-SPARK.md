@@ -73,6 +73,7 @@ Every claim here has a command. A claim whose check has not been run reads UNVER
 | Browser page works on desktop and phone, read-only | `PLAYWRIGHT=… node crates/disk-web/web-check.mjs` | 13/13 pass (2026-09-24) |
 | Growing fast and Came back are useful on real data | the week check: `curl -s 127.0.0.1:7321/api/h/local/suggest` after 7 days of snapshots | UNVERIFIED (needs history until 2026-10-01) |
 | Strict lints | `cargo clippy -p disk-web -p disktree-core --all-targets -- -D warnings` | 0 findings (2026-09-24). The upstream GPUI app was not built here (Linux only). |
+| Clean up loads under heavy load | harness step `clean up` (suggestions within 45 s); `curl -w %{time_total} 127.0.0.1:7321/api/h/local/suggest` | FAILING 2026-09-25 at load 80–130: `/suggest` took 5–33 s, and the app's 30 s request timeout loses the slow ones. disk-web runs at Background priority. Open. |
 | Memory owners are attributed right; imports are idempotent; thinning keeps one sample an hour | `cargo test -p disk-web mem::` | pass 2026-09-25, 8 tests |
 | Memory is sampled on both machines | `disk-mem top` on each; `curl -s 127.0.0.1:7321/api/h/forge/mem` | 2026-09-25: laptop 100 owners (Claude Code 6.5 GB, Ollama 4.5 GB, Chrome 3.9 GB); Forge 71 owners, `pm2:forge-bot` 182 MB |
 | mem-guard's history is in mem.db | `sqlite3 …/mem.db "select source,count(*) from mem_samples group by 1"` | 5,742 of 5,742 log lines imported; a re-import adds 0 (2026-09-25) |

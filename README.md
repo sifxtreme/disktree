@@ -1,6 +1,6 @@
 # disktree
 
-> **This fork adds Guilty Spark: a read-only macOS disk advisor with hourly history.**
+> **This fork adds Guilty Spark: a read-only macOS disk and memory advisor with history.**
 > Upstream disktree is a GPUI app for Omarchy (Linux) that marks and removes files.
 > This fork keeps its core (`disktree-core`: scanning, layout, classification) and adds
 > macOS parts that **only suggest; nothing in them deletes anything**:
@@ -19,7 +19,15 @@
 >   offers Show in Finder, Copy Path and **Copy Delete Command**: the owner's cleanup for
 >   a known cache (`npm cache clean --force`, `uv cache clean`, …) or `trash '<path>'`,
 >   for you to paste. The app never deletes anything itself. The same view is also a
->   browser page at `http://127.0.0.1:7321`.
+>   browser page at `http://127.0.0.1:7321`. A launchd agent relaunches the app after a
+>   crash, and the menu panel counts crashes.
+> - **`disk-mem`**: memory over time (it replaced a swap watchdog). Every 5 minutes it
+>   records pressure, swap and each owner's memory into `mem.db`: a Claude Code session,
+>   a pm2 app, a launchd job or an app, summed across its processes. It uses
+>   `phys_footprint`, Activity Monitor's figure, not RSS, which leaves out compressed
+>   memory. It also records resident Ollama models. It notifies when pressure changes,
+>   and only then. The app's **Memory** page shows it; `disk-mem top` and
+>   `disk-mem owner NAME --days 7` answer from the terminal.
 > - **Core additions**: `ScanOptions::exclude` lists a directory without opening it.
 >   `ScanOptions::fold_below` sums small files and small directory subtrees into one
 >   leaf, keeping the files classification reads. That cut the snapper's peak memory
@@ -27,15 +35,15 @@
 >
 > ![Guilty Spark: a home directory as a treemap, with free space, the inspector and 7 days of history](assets/guilty-spark/map.png)
 >
-> | Clean up: what to delete, and why (each row: Finder, copy path, copy delete command) | Clicked into a folder | Dark |
-> |---|---|---|
-> | ![Clean up](assets/guilty-spark/cleanup.png) | ![Zoomed](assets/guilty-spark/zoom.png) | ![Dark](assets/guilty-spark/dark.png) |
+> | Clean up: what to delete, and why (each row: Finder, copy path, copy delete command) | Memory: who holds it, swap over 7 days, one owner's week | Clicked into a folder | Dark |
+> |---|---|---|---|
+> | ![Clean up](assets/guilty-spark/cleanup.png) | ![Memory](assets/guilty-spark/memory.png) | ![Zoomed](assets/guilty-spark/zoom.png) | ![Dark](assets/guilty-spark/dark.png) |
 >
 > Install, how it works, and the safety model: **[GUILTY-SPARK.md](GUILTY-SPARK.md)**.
 >
 > ```sh
 > cargo build --release -p disk-web && sh packaging/macos/sign.sh
-> sh packaging/macos/install.sh local        # hourly snapshots + API on 127.0.0.1:7321
+> sh packaging/macos/install.sh local        # hourly snapshots, memory every 5 min, API on 127.0.0.1:7321
 > apps/mac/build-app.sh                       # ~/Applications/Guilty Spark.app
 > apps/mac/harness/run.sh                     # UI harness: drives the app, checks, screenshots
 > ```
