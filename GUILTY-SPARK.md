@@ -48,7 +48,9 @@ tests a build before installing. Bugs it found are listed in the commit history;
 intermittent crash on resize inside the system `.inspector` column, now a plain panel.
 
 `apps/mac/build-app.sh` also installs `com.asif.disk-app`, a LaunchAgent that starts the app at login
-and relaunches it after a crash (`KeepAlive` on unsuccessful exit, 30 s throttle), never after Quit.
+and relaunches it after a crash (`KeepAlive` on unsuccessful exit, 10 s throttle), never after Quit.
+Opened from the Dock, Spotlight or Finder, the app hands itself to that agent (`launchctl kickstart`) and exits,
+so whichever way it starts, it comes back after a crash. Closing the window (⌘W) keeps it in the menu bar.
 The menu panel counts crash reports from the last 7 days, so a relaunch loop stays visible.
 
 ## Verifying these claims

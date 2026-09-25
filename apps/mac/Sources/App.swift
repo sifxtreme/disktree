@@ -18,6 +18,7 @@ struct GuiltySparkApp: App {
     @StateObject private var model = SparkModel.shared
 
     init() {
+        Self.handOffToAgent()
         // `-appearance dark|light` for screenshots; otherwise the system setting.
         switch UserDefaults.standard.string(forKey: "appearance") {
         case "dark": NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
@@ -28,6 +29,30 @@ struct GuiltySparkApp: App {
         if Harness.enabled {
             Task { @MainActor in await HarnessRunner().run() }
         }
+    }
+
+    /// Opened from the Dock, Spotlight or Finder, this copy is not launchd's, so a crash would leave
+    /// the app dead. Hand off: ask launchd to start its job (com.asif.disk-app, which relaunches after
+    /// a crash) and exit. launchd sets XPC_SERVICE_NAME to the label for its own copy. Without the
+    /// agent (another Mac, not installed) or under the harness, run as is.
+    static let agentLabel = "com.asif.disk-app"
+
+    private static func handOffToAgent() {
+        guard !Harness.enabled,
+              ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] != agentLabel else { return }
+        let job = "gui/\(getuid())/\(agentLabel)"
+        func launchctl(_ args: String...) -> Int32 {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            p.arguments = args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return -1 }
+            p.waitUntilExit()
+            return p.terminationStatus
+        }
+        guard launchctl("print", job) == 0, launchctl("kickstart", job) == 0 else { return }
+        exit(0)
     }
 
     var body: some Scene {

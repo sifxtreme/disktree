@@ -45,7 +45,7 @@ PLIST
 codesign -f -s "$identity" -o runtime --timestamp=none "$app"
 codesign -v "$app"
 # com.asif.disk-app keeps the menu-bar app running: it starts at login and launchd relaunches it
-# after a crash (an unsuccessful exit), but not after Quit (exit 0). ThrottleInterval spaces the
+# after a crash (an unsuccessful exit), but not after Quit (exit 0). ThrottleInterval (10 s, launchd's default) spaces the
 # relaunches so a crash on launch cannot spin. The app counts its crash reports in the menu panel.
 label=com.asif.disk-app
 agent="$HOME/Library/LaunchAgents/$label.plist"
@@ -66,7 +66,7 @@ cat > "$agent" <<PLIST
   <key>ProgramArguments</key><array><string>$HOME/Applications/Guilty Spark.app/Contents/MacOS/GuiltySpark</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>ThrottleInterval</key><integer>30</integer>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>LimitLoadToSessionType</key><string>Aqua</string>
   <key>ProcessType</key><string>Interactive</string>
   <key>StandardOutPath</key><string>$HOME/Library/Logs/$label.log</string>
