@@ -431,6 +431,11 @@ struct SelectionCard: View {
                     Button("Show in Finder") { showInFinder(path) }
                         .disabled(model.host != "local")
                     Button("Copy Path") { copyPath(path) }
+                    Menu("Copy Delete Command") {
+                        Button(deleteCommand(path)) { copyCommand(deleteCommand(path)); model.show("Copied: \(deleteCommand(path))") }
+                        Button("rm -rf (permanent)") { copyCommand(deleteCommand(path, permanent: true)); model.show("Copied a permanent delete command") }
+                    }
+                    .fixedSize()
                     Spacer()
                 }
                 .controlSize(.small)
@@ -688,4 +693,33 @@ struct Sparkline: View {
 func displayPath(_ path: String, root: String?) -> String {
     guard let root, path == root || path.hasPrefix(root + "/") else { return path }
     return "~" + path.dropFirst(root.count)
+}
+
+/// A path quoted for zsh/bash: single quotes, with any single quote closed, escaped and reopened.
+func shellQuoted(_ path: String) -> String {
+    "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+/// The command to clear `path`, for the user to paste; Guilty Spark itself never deletes. A known cache
+/// gets its owner's own cleanup (it knows what is safe to drop); anything else goes to the Trash with
+/// macOS's `trash`, so it can be put back.
+func deleteCommand(_ path: String, permanent: Bool = false) -> String {
+    let home = NSHomeDirectory()
+    let owned: [(String, String)] = [
+        ("/.npm/_cacache", "npm cache clean --force"),
+        ("/.cache/uv", "uv cache clean"),
+        ("/Library/Caches/Homebrew", "brew cleanup --prune=all"),
+        ("/Library/pnpm/store", "pnpm store prune"),
+        ("/.yarn/berry/cache", "yarn cache clean --all"),
+        ("/Library/Developer/CoreSimulator", "xcrun simctl delete unavailable"),
+    ]
+    if !permanent, let hit = owned.first(where: { path == home + $0.0 || path.hasPrefix(home + $0.0 + "/") }) {
+        return hit.1
+    }
+    return (permanent ? "rm -rf " : "trash ") + shellQuoted(path)
+}
+
+func copyCommand(_ command: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(command, forType: .string)
 }

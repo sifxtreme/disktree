@@ -179,6 +179,12 @@ struct SuggestRow: View {
                     Image(systemName: "doc.on.doc").font(.system(size: 13)).frame(width: 26, height: 26)
                 }
                 .help("Copy path")
+                Button {
+                    copyCommand(deleteCommand(item.path)); model.show("Copied: \(deleteCommand(item.path))")
+                } label: {
+                    Image(systemName: "terminal").font(.system(size: 13)).frame(width: 26, height: 26)
+                }
+                .help("Copy delete command: \(deleteCommand(item.path))")
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.muted)
@@ -194,6 +200,9 @@ struct SuggestRow: View {
             Button("Show in Finder") { showInFinder(item.path) }
                 .disabled(model.host != "local")
             Button("Copy Path") { copyPath(item.path) }
+            Divider()
+            Button("Copy Delete Command  \(deleteCommand(item.path))") { copyCommand(deleteCommand(item.path)) }
+            Button("Copy rm -rf Command (permanent)") { copyCommand(deleteCommand(item.path, permanent: true)) }
         }
     }
 }

@@ -234,6 +234,9 @@ struct TreemapView: View {
             Button("Show in Finder") { showInFinder(path) }
                 .disabled(model.host != "local")
             Button("Copy Path") { copyPath(path) }
+            Divider()
+            Button("Copy Delete Command  \(deleteCommand(path))") { copyCommand(deleteCommand(path)) }
+            Button("Copy rm -rf Command (permanent)") { copyCommand(deleteCommand(path, permanent: true)) }
         }
         if model.canGoUp {
             Divider()

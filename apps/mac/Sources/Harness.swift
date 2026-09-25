@@ -105,6 +105,21 @@ final class HarnessRunner {
         }
         await sleep(0.3)
         await shot("06-cleanup-rows")
+
+        // Copy Delete Command: the pasted command must address exactly this path, however it is named.
+        await step("delete command quoting") {
+            let nasty = "/tmp/guilty spark's \"test\" $HOME `x` dir"
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c", "printf %s " + shellQuoted(nasty)]
+            let pipe = Pipe(); p.standardOutput = pipe
+            try? p.run(); p.waitUntilExit()
+            let echoed = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+            self.check("shell quoting round-trips a path with spaces, quotes, $ and backticks", echoed == nasty, echoed ?? "nil")
+            self.check("a known cache gets its tool's cleanup",
+                       deleteCommand(NSHomeDirectory() + "/.npm/_cacache") == "npm cache clean --force")
+            self.check("anything else goes to the Trash", deleteCommand("/tmp/x").hasPrefix("trash "))
+        }
         model.page = .map
 
         // 6. Every other machine: loads, and says whether its snapshot is complete.

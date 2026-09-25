@@ -28,7 +28,10 @@ Our additions:
 ## Using the app
 
 - **Map:** click a folder to go in; Back/Forward (⌘[ ⌘], Esc), Enclosing Folder (⌘↑, ⌫), or any
-  part of the path to come out. Right-click a tile for Open, Inspect, Show in Finder, Copy Path.
+  part of the path to come out. Right-click a tile for Open, Inspect, Show in Finder, Copy Path, and
+  **Copy Delete Command**: a command for you to paste. It is the owner's cleanup for a known cache
+  (`npm cache clean --force`, `uv cache clean`, …) and otherwise `trash '<path>'` (recoverable); `rm -rf`
+  is a separate, labelled item. The app itself still never deletes.
   Colour by kind of data or by last write (Age). Hatching marks space that regenerates.
 - **Clean up (⌘2):** four ranked lists, each item with the reason and size. Suggestions only.
 - **Menu bar:** free space on every machine, and "Snapshot now".
