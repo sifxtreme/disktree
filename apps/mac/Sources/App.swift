@@ -28,8 +28,6 @@ struct GuiltySparkApp: App {
             CommandGroup(after: .toolbar) {
                 Button("Snapshot Now") { model.snapshotNow() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
-                Button("Review Marked…") { model.openReview() }
-                    .keyboardShortcut("k", modifiers: .command)
                 Button("Enclosing Folder") { model.up() }
                     .keyboardShortcut(.upArrow, modifiers: .command)
                 Button("Back") { model.goBack() }

@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 // MARK: - window
@@ -50,18 +49,9 @@ struct MainWindow: View {
                     .help(model.current.status?.scanning == true ? "A snapshot is running" : "Take a snapshot now (r)")
             }
             ToolbarItem {
-                Button { model.openReview() } label: {
-                    Text(model.current.marks.isEmpty ? "Review" : "Review \(model.current.marks.count) · \(bytes(model.markedBytes))")
-                }
-                .modifier(ReviewStyle(active: !model.current.marks.isEmpty))
-                .disabled(model.current.marks.isEmpty)
-                .help("Review what is marked (c)")
-            }
-            ToolbarItem {
                 Button { showInspector.toggle() } label: { Label("Inspector", systemImage: "sidebar.right") }
             }
         }
-        .sheet(item: $model.review) { _ in ReviewSheet().environmentObject(model) }
         .overlay(alignment: .bottom) {
             if let toast = model.toast {
                 Text(toast).font(Theme.subhead)
@@ -78,19 +68,6 @@ struct MainWindow: View {
     private var subtitle: String {
         guard let space = model.current.status?.space else { return "" }
         return "\(bytes(space.available)) free of \(bytes(space.total))"
-    }
-}
-
-/// Prominent glass only when there is something to review: a disabled prominent button on glass
-/// reads as a live, unreadable blue pill (DESIGN.md §5: one or two prominent buttons, accent only for state).
-struct ReviewStyle: ViewModifier {
-    let active: Bool
-    func body(content: Content) -> some View {
-        if active {
-            content.buttonStyle(.glassProminent).tint(Theme.accent)
-        } else {
-            content.buttonStyle(.glass)
-        }
     }
 }
 
@@ -327,7 +304,6 @@ struct Legend: View {
                 }
             }
             swatch(Theme.surface2, "reclaimable", hatched: true)
-            swatch(Theme.surface.mix(with: Theme.bad, by: 0.3), "marked")
         }
         .font(Theme.caption)
         .foregroundStyle(Theme.muted)
@@ -401,7 +377,6 @@ struct Inspector: View {
                 DiskCard()
                 HistoryCard()
                 LookCard()
-                if !model.current.marks.isEmpty { MarkedCard() }
             }
             .padding(12)
         }
@@ -440,17 +415,9 @@ struct SelectionCard: View {
                     if n.dir && n.hasChildren && !isRoot {
                         Button("Open") { model.open(path) }
                     }
-                    if !isRoot {
-                        let marked = s.marks[path] != nil
-                        let covered = !marked && model.isMarked(path)
-                        Button(marked ? "Unmark" : covered ? "Goes with parent" : "Mark") {
-                            model.toggleMark(path, name: n.name, bytes: n.bytes)
-                        }
-                        .disabled(covered)
-                        .tint(marked ? Theme.bad : nil)
-                    }
-                    Button("Show in Finder") { NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "") }
+                    Button("Show in Finder") { showInFinder(path) }
                         .disabled(model.host != "local")
+                    Button("Copy Path") { copyPath(path) }
                     Spacer()
                 }
                 .controlSize(.small)
@@ -469,7 +436,6 @@ struct DiskCard: View {
         Card(title: "Disk") {
             if let space = st?.space {
                 let used = space.total - space.available
-                let marked = model.markedBytes
                 let share = Double(space.available) / Double(max(space.total, 1))
                 let tint = share < 0.1 ? Theme.bad : share < 0.2 ? Theme.warn : Theme.accent
                 GeometryReader { geo in
@@ -477,11 +443,6 @@ struct DiskCard: View {
                     ZStack(alignment: .leading) {
                         Capsule().fill(Theme.surface2)
                         Capsule().fill(tint).frame(width: w * CGFloat(used) / CGFloat(space.total))
-                        if marked > 0 {
-                            Capsule().fill(Theme.good.opacity(0.55))
-                                .frame(width: w * CGFloat(min(marked, used)) / CGFloat(space.total))
-                                .offset(x: w * CGFloat(max(0, used - marked)) / CGFloat(space.total))
-                        }
                     }
                 }
                 .frame(height: 8)
@@ -491,15 +452,6 @@ struct DiskCard: View {
                     Text("\(bytes(space.total)) total").foregroundStyle(Theme.muted)
                 }
                 .font(Theme.caption.monospacedDigit())
-                if marked > 0 {
-                    HStack {
-                        Text("After marks ").foregroundStyle(Theme.muted) + Text(bytes(space.available + marked)).bold()
-                        Spacer()
-                        Text("projected").foregroundStyle(Theme.muted)
-                    }
-                    .font(Theme.caption.monospacedDigit())
-                }
-                Text("Trash: \(st?.trash ?? "—")").font(Theme.caption).foregroundStyle(Theme.muted)
             } else {
                 Text(model.current.error == nil ? "—" : "No answer.").foregroundStyle(Theme.muted)
             }
@@ -518,24 +470,8 @@ struct HistoryCard: View {
                 Text(points.isEmpty ? "—" : "One snapshot so far. The trend starts with the next, within the hour.")
                     .font(Theme.caption).foregroundStyle(Theme.muted)
             } else {
-                Chart(points, id: \.t) { p in
-                    AreaMark(x: .value("Time", Date(timeIntervalSince1970: Double(p.t))),
-                             y: .value("Free", Double(p.available ?? 0) / 1e9))
-                        .foregroundStyle(Theme.accent.opacity(0.12))
-                    LineMark(x: .value("Time", Date(timeIntervalSince1970: Double(p.t))),
-                             y: .value("Free", Double(p.available ?? 0) / 1e9))
-                        .foregroundStyle(Theme.accent)
-                        .lineStyle(StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
-                }
-                .chartYScale(domain: .automatic(includesZero: false))
-                .chartXAxis(.hidden)
-                .chartYAxis {
-                    AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { v in
-                        AxisValueLabel { if let g = v.as(Double.self) { Text("\(Int(g)) GB") } }
-                            .font(Theme.caption)
-                    }
-                }
-                .frame(height: 70)
+                Sparkline(values: points.map { Double($0.available ?? 0) })
+                    .frame(height: 64)
                 let delta = (points.last?.available ?? 0) - (points.first?.available ?? 0)
                 HStack {
                     Text(delta < 0 ? "Down " : "Up ").foregroundStyle(Theme.muted) + Text(bytes(abs(delta))).bold()
@@ -574,10 +510,7 @@ struct LookCard: View {
                 Text(s.status?.tree == nil ? "—" : "Nothing over 64 MB stands out.").font(Theme.caption).foregroundStyle(Theme.muted)
             } else {
                 ForEach(all ? s.insights : Array(s.insights.prefix(5))) { item in
-                    ListRow(title: item.name ?? baseName(item.path), detail: item.why, value: bytes(item.bytes),
-                            accessory: item.markable ? (s.marks[item.path] != nil ? "xmark" : "plus") : nil,
-                            accessoryColor: s.marks[item.path] != nil ? Theme.bad : Theme.muted,
-                            onAccessory: { model.toggleMark(item.path, name: item.name ?? baseName(item.path), bytes: item.bytes) }) {
+                    ListRow(title: item.name ?? baseName(item.path), detail: item.why, value: bytes(item.bytes)) {
                         model.reveal(item.path)
                     }
                 }
@@ -586,27 +519,6 @@ struct LookCard: View {
                         .buttonStyle(.link).font(Theme.caption)
                 }
             }
-        }
-    }
-}
-
-struct MarkedCard: View {
-    @EnvironmentObject var model: SparkModel
-
-    var body: some View {
-        let s = model.current
-        Card(title: "Marked · \(bytes(model.markedBytes))",
-             trailing: AnyView(Button("Clear") { model.clearMarks() }.buttonStyle(.link).font(Theme.caption))) {
-            ForEach(s.marks.keys.sorted(), id: \.self) { path in
-                let m = s.marks[path]!
-                ListRow(title: m.name, detail: parentOf(path), value: bytes(m.bytes), accessory: "xmark", accessoryColor: Theme.bad,
-                        onAccessory: { model.toggleMark(path, name: m.name, bytes: m.bytes) }) {
-                    model.reveal(path)
-                }
-            }
-            Button { model.openReview() } label: { Text("Review…").frame(maxWidth: .infinity) }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 4)
         }
     }
 }
@@ -646,127 +558,6 @@ struct ListRow: View {
         .onHover { hovering = $0 }
         .onTapGesture(perform: action)
         .padding(.horizontal, -8)
-    }
-}
-
-// MARK: - review sheet
-
-struct ReviewSheet: View {
-    @EnvironmentObject var model: SparkModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        let r = model.review
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Remove from \(model.label(r?.host ?? ""))").font(Theme.title)
-            if let e = r?.error { banner(e, Theme.bad) }
-            if let r, let plan = r.plan {
-                switch r.step {
-                case .choose, .confirm: choose(r, plan)
-                case .running, .done: progress(r, plan)
-                }
-            } else if r?.error == nil {
-                ProgressView().controlSize(.small)
-            }
-        }
-        .padding(24)
-        .frame(width: 560)
-        .interactiveDismissDisabled(r?.step == .running)
-    }
-
-    @ViewBuilder
-    private func choose(_ r: ReviewState, _ plan: PlanDTO) -> some View {
-        Text("\(plan.targets.count) item\(plan.targets.count == 1 ? "" : "s") · \(bytes(plan.bytes)). Nothing has been touched yet.")
-            .font(Theme.subhead).foregroundStyle(Theme.muted)
-        ScrollView {
-            VStack(spacing: 0) {
-                ForEach(plan.targets) { t in
-                    ListRow(title: baseName(t.path), detail: parentOf(t.path), value: bytes(t.bytes),
-                            accessory: r.step == .choose ? "xmark" : nil, onAccessory: { model.unmarkInReview(t.path) }) {}
-                }
-            }
-            .padding(.horizontal, 8)
-        }
-        .frame(maxHeight: 240)
-        if !plan.covered.isEmpty {
-            Text("\(plan.covered.count) marked path\(plan.covered.count == 1 ? " goes" : "s go") with a folder above; counted once.")
-                .font(Theme.caption).foregroundStyle(Theme.muted)
-        }
-        if !plan.blocked.isEmpty {
-            banner("\(plan.blocked.count) will not be touched:\n" + plan.blocked.map { "\($0.path): \($0.reason)" }.joined(separator: "\n"), Theme.warn)
-        }
-        let st = model.states[r.host]?.status
-        if r.step == .choose {
-            Picker("", selection: Binding(get: { model.review?.mode ?? "trash" }, set: { m in
-                model.review?.mode = m
-                Task { await model.plan() }
-            })) {
-                VStack(alignment: .leading) {
-                    Text("Move to Trash")
-                    Text(st?.trashAvailable == true ? "\(st?.trash ?? ""): recoverable until the Trash is emptied." : "No trash on this machine.")
-                        .font(Theme.caption).foregroundStyle(Theme.muted)
-                }
-                .tag("trash")
-                .disabled(st?.trashAvailable != true)
-                VStack(alignment: .leading) {
-                    Text("Delete permanently")
-                    Text("rm -rf. Cannot be undone. Asks once more.").font(Theme.caption).foregroundStyle(Theme.muted)
-                }
-                .tag("permanent")
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
-            HStack {
-                Spacer()
-                Button("Cancel") { model.review = nil }.keyboardShortcut(.cancelAction)
-                if r.mode == "trash" {
-                    Button("Move to Trash · \(bytes(plan.bytes))") { model.commit() }
-                        .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                        .disabled(plan.targets.isEmpty)
-                } else {
-                    Button("Delete permanently…") { model.review?.step = .confirm }
-                        .tint(Theme.bad)
-                        .disabled(plan.targets.isEmpty)
-                }
-            }
-        } else {
-            banner("This deletes \(plan.targets.count) item\(plan.targets.count == 1 ? "" : "s") and \(bytes(plan.bytes)) on \(model.label(r.host)), now. There is no undo.", Theme.bad)
-            HStack {
-                Spacer()
-                Button("Back") { model.review?.step = .choose }.keyboardShortcut(.cancelAction)
-                Button("Delete permanently") { model.commit() }
-                    .buttonStyle(.borderedProminent).tint(Theme.bad)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func progress(_ r: ReviewState, _ plan: PlanDTO) -> some View {
-        let job = r.job
-        if let done = job?.done, let job {
-            let failed = job.items.filter { $0.error != nil }
-            let what = r.mode == "trash" ? "Moved to Trash" : "Deleted"
-            let tail = r.mode == "trash"
-                ? "The disk frees it when the Trash is emptied."
-                : "The disk reports \(bytes(done.gained)) more free\(Double(done.gained) < Double(done.bytes) * 0.8 ? " (snapshots or hardlinks may still hold the rest)" : "")."
-            banner("\(what): \(done.removed) of \(job.total), \(bytes(done.bytes)) as measured by the snapshot. \(tail)", failed.isEmpty ? Theme.good : Theme.warn)
-            ForEach(failed) { f in banner("\(f.path): \(f.error ?? "")", Theme.bad) }
-            Text("A fresh snapshot is running so the map matches the disk.").font(Theme.caption).foregroundStyle(Theme.muted)
-            HStack { Spacer(); Button("Done") { model.review = nil }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
-        } else {
-            HStack(spacing: 10) {
-                ProgressView(value: Double(job?.items.count ?? 0), total: Double(max(job?.total ?? Int64(plan.targets.count), 1)))
-                Text("\(job?.items.count ?? 0) of \(job?.total ?? Int64(plan.targets.count))").font(Theme.subhead.monospacedDigit())
-            }
-        }
-    }
-
-    private func banner(_ text: String, _ color: Color) -> some View {
-        Text(text).font(Theme.subhead)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).strokeBorder(color.opacity(0.4), lineWidth: 0.5))
     }
 }
 
@@ -828,5 +619,49 @@ struct MenuPanel: View {
         }
         .padding(14)
         .frame(width: 300)
+    }
+}
+
+func showInFinder(_ path: String) {
+    NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+}
+
+func copyPath(_ path: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(path, forType: .string)
+}
+
+/// Free space over time as one drawn path: the Charts framework cost more memory than this line is
+/// worth. Scaled to its own range (not zero-based) so a few GB of change is visible.
+struct Sparkline: View {
+    let values: [Double]
+
+    var body: some View {
+        GeometryReader { geo in
+            let lo = (values.min() ?? 0), hi = (values.max() ?? 1)
+            let pad = max((hi - lo) * 0.15, 1e8)
+            let span = (hi + pad) - (lo - pad)
+            let pts = values.enumerated().map { i, v in
+                CGPoint(x: geo.size.width * CGFloat(i) / CGFloat(max(values.count - 1, 1)),
+                        y: geo.size.height * CGFloat(1 - (v - (lo - pad)) / span))
+            }
+            ZStack(alignment: .topTrailing) {
+                Path { p in
+                    guard let first = pts.first, let last = pts.last else { return }
+                    p.move(to: CGPoint(x: first.x, y: geo.size.height))
+                    pts.forEach { p.addLine(to: $0) }
+                    p.addLine(to: CGPoint(x: last.x, y: geo.size.height))
+                    p.closeSubpath()
+                }
+                .fill(Theme.accent.opacity(0.12))
+                Path { p in
+                    guard let first = pts.first else { return }
+                    p.move(to: first)
+                    pts.dropFirst().forEach { p.addLine(to: $0) }
+                }
+                .stroke(Theme.accent, style: StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
+                Text(bytes(Int64(hi))).font(Theme.caption).foregroundStyle(Theme.muted)
+            }
+        }
     }
 }

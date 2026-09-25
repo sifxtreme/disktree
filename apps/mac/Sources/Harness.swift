@@ -8,8 +8,8 @@ import SwiftUI
 // started by the app itself would need Screen Recording permission. Results go to
 // `<out>/results.json`; the process exits 0 only when every check passed.
 //
-// Isolation: marks are in memory only (the user's saved marks are never read or written), no menu-bar
-// item is added, and `commit()` refuses: the harness can plan a removal, never perform one.
+// Isolation: a separate process with no menu-bar item. The app is read-only by design (it suggests,
+// it never deletes), and the harness checks that the server has no endpoint that could.
 
 enum Harness {
     static let enabled = UserDefaults.standard.bool(forKey: "harness")
@@ -90,27 +90,21 @@ final class HarnessRunner {
         await sleep(0.4)
         await shot("05-cleanup")
 
-        // 5. Mark one item, plan its removal (never commit), then clear.
-        if let item = model.current.suggest?.sections.flatMap(\.items).first(where: \.markable) {
-            await step("mark and plan") {
-                self.model.toggleMark(item.path, name: item.name, bytes: item.bytes)
-                self.check("one mark", self.model.current.marks.count == 1)
-                self.check("marked bytes equal the item", self.model.markedBytes == item.bytes, "\(self.model.markedBytes) vs \(item.bytes)")
-                self.model.openReview()
-                await self.wait("plan loaded") { self.model.review?.plan != nil || self.model.review?.error != nil }
-                let plan = self.model.review?.plan
-                self.check("plan has the one target", plan?.targets.map(\.path) == [item.path], self.model.review?.error ?? "")
-                self.check("plan blocks nothing", plan?.blocked.isEmpty == true, plan?.blocked.map(\.reason).joined(separator: "; ") ?? "")
-                self.check("default mode is trash", self.model.review?.mode == "trash")
+        // 5. Read-only by design: the server must have no endpoint that deletes. A rail that is
+        // checked by asking for it, so it fails the day one comes back.
+        await step("no delete endpoints") {
+            for (method, action) in [("POST", "remove"), ("POST", "plan"), ("GET", "removal"), ("POST", "delete"), ("POST", "trash")] {
+                var request = URLRequest(url: API.url("api/h/local/\(action)"))
+                request.httpMethod = method
+                request.setValue("1", forHTTPHeaderField: "X-Disk")
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = method == "POST" ? Data(#"{"paths":["/nonexistent-harness-probe"]}"#.utf8) : nil
+                let status = (try? await URLSession.shared.data(for: request)).flatMap { ($0.1 as? HTTPURLResponse)?.statusCode } ?? -1
+                self.check("\(method) \(action) is not an endpoint", status == 404, "HTTP \(status)")
             }
-            await sleep(0.5)
-            await shot("06-review-sheet")
-            model.review = nil
-            model.clearMarks()
-            check("marks cleared", model.current.marks.isEmpty)
-        } else {
-            check("clean up offers a markable item", false)
         }
+        await sleep(0.3)
+        await shot("06-cleanup-rows")
         model.page = .map
 
         // 6. Every other machine: loads, and says whether its snapshot is complete.
@@ -161,7 +155,7 @@ final class HarnessRunner {
         // 8. Cost.
         let mb = footprintMB()
         timings["footprintMB"] = mb
-        check("memory footprint under 250 MB", mb < 250, String(format: "%.0f MB", mb))
+        check("memory footprint under 150 MB", mb < 150, String(format: "%.0f MB", mb))
 
         let result: [String: Any] = ["checks": checks, "timings": timings, "failed": failed]
         if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {

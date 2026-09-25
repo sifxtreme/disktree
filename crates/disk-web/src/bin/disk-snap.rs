@@ -85,7 +85,7 @@ fn run(root: &Path, home: &Path, dir: &Path) -> Result<(), String> {
         exclude: excluded.clone(),
         // Snapshots never keep a file under ~1 MB by name (store.rs prunes far
         // above it), so the walk need not hold millions of them in memory.
-        fold_below: Some(1 << 20),
+        fold_below: Some(4 << 20),
         ..ScanOptions::default()
     };
 

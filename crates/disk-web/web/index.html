@@ -21,7 +21,7 @@
     <div class="grow"></div>
     <div class="status" id="scanstatus"><span class="dot"></span><span>Connecting…</span></div>
     <div class="side-keys">
-      <span><kbd>↵</kbd> open</span><span><kbd>⌫</kbd> up</span><span><kbd>x</kbd> mark</span><span><kbd>c</kbd> review</span>
+      <span><kbd>↵</kbd> open</span><span><kbd>⌫</kbd> up</span>
     </div>
   </aside>
 
@@ -34,7 +34,6 @@
         <button class="segbtn" data-mode="age" aria-pressed="false">Age</button>
       </div>
       <button class="btn icon" id="rescan" title="Take a snapshot now (r)">↻<span class="hide-sm"> Snapshot now</span></button>
-      <button class="btn primary" id="reviewbtn" disabled>Review<span id="markcount"></span></button>
     </header>
 
     <section class="verdict" id="verdict"></section>
@@ -50,15 +49,11 @@
         <section class="card" id="diskcard"></section>
         <section class="card" id="histcard"></section>
         <section class="card" id="lookcard"></section>
-        <section class="card" id="markcard" hidden></section>
       </aside>
     </div>
   </main>
 </div>
 
-<div class="scrim" id="scrim" hidden>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheettitle" id="sheet"></div>
-</div>
 <div class="toast" id="toast" role="status"></div>
 <script src="/app.js"></script>
 </body>

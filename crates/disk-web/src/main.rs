@@ -18,9 +18,6 @@ use std::{env, fs, thread};
 mod store;
 
 use disktree_core::insights::{Finding, worth_a_look};
-use disktree_core::removal::{
-    self, RemovalEvent, RemovalHandle, RemovalMode, Target,
-};
 use disktree_core::space::space_info;
 use disktree_core::tree::{Node, NodeKind};
 use serde_json::{Value, json};
@@ -64,16 +61,6 @@ struct Peer {
     token: Option<String>,
 }
 
-#[derive(Debug, Default)]
-struct RemovalJob {
-    handle: Option<RemovalHandle>,
-    mode: &'static str,
-    total: usize,
-    items: Vec<Value>,
-    done: Option<Value>,
-    available_before: u64,
-}
-
 #[derive(Debug)]
 struct State {
     dir: PathBuf,
@@ -81,7 +68,6 @@ struct State {
     tree: Option<Arc<Node>>,
     db_error: Option<String>,
     kick_error: Option<String>,
-    removal: Option<RemovalJob>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -107,7 +93,6 @@ fn main() {
         tree: None,
         db_error: None,
         kick_error: None,
-        removal: None,
     }));
     poll(&mut lock(&state));
     eprintln!(
@@ -257,7 +242,7 @@ fn root_of(state: &State) -> Option<PathBuf> {
     state.meta.as_ref().map(|meta| meta.root.clone())
 }
 
-/// Collect whatever finished since the last request: a scan, removal events.
+/// Load the newest snapshot if the snapper wrote one since the last request.
 fn poll(state: &mut State) {
     let db_path = state.dir.join("disk.db");
     if db_path.exists() {
@@ -279,52 +264,6 @@ fn poll(state: &mut State) {
             Ok(None) => state.db_error = None,
             Err(error) => state.db_error = Some(error.to_string()),
         }
-    }
-
-    let root = root_of(state).unwrap_or_default();
-    let state_dir = state.dir.clone();
-    let mut finished = false;
-    if let Some(job) = state.removal.as_mut()
-        && let Some(handle) = job.handle.as_ref()
-    {
-        while let Some(event) = handle.poll() {
-            match event {
-                RemovalEvent::Start { total } => job.total = total,
-                RemovalEvent::Item {
-                    path,
-                    bytes,
-                    outcome,
-                } => job.items.push(json!({
-                    "path": path.display().to_string(),
-                    "bytes": bytes,
-                    "error": outcome.err(),
-                })),
-                RemovalEvent::Done {
-                    removed,
-                    bytes,
-                    failed,
-                } => {
-                    // Measured, not projected: the saving is what statvfs
-                    // says came back, so a hardlink or a snapshot that kept
-                    // the blocks shows up as a smaller number.
-                    let after = space_info(&root).map_or(0, |s| s.available);
-                    job.done = Some(json!({
-                        "removed": removed,
-                        "bytes": bytes,
-                        "failed": failed,
-                        "gained": after as i64 - job.available_before as i64,
-                    }));
-                    finished = true;
-                }
-            }
-        }
-        if finished {
-            log_removals(&state_dir, job);
-            job.handle = None;
-        }
-    }
-    if finished {
-        kick_snapshot(state);
     }
 }
 
@@ -395,7 +334,7 @@ fn api(
 
     let response = if host == "local" {
         let (status, value) =
-            local(request.method(), action, query, &body, state);
+            local(request.method(), action, query, state);
         reply(status, &value)
     } else if let Some(peer) = config.peers.iter().find(|p| p.id == host) {
         let raw_query = request.url().split_once('?').map(|(_, q)| q);
@@ -410,7 +349,6 @@ fn local(
     method: &Method,
     action: &str,
     query: &HashMap<String, String>,
-    body: &Value,
     state: &Shared,
 ) -> (u16, Value) {
     let mut guard = lock(state);
@@ -466,11 +404,6 @@ fn local(
             drop(guard);
             (200, insights(&tree, &root, scanned_at))
         }
-        (Method::Post, "plan" | "remove") => {
-            let commit = action == "remove";
-            remove(&mut guard, body, commit)
-        }
-        (Method::Get, "removal") => (200, removal_status(&guard)),
         _ => (404, json!({"error": "not found"})),
     }
 }
@@ -500,9 +433,6 @@ fn status(state: &State) -> Value {
         "space": space.map(|s| json!({
             "total": s.total, "free": s.free, "available": s.available,
         })),
-        "trash": removal::detect_trash_backend().label(),
-        "trashAvailable": removal::detect_trash_backend().is_available(),
-        "removing": state.removal.as_ref().is_some_and(|j| j.done.is_none()),
     })
 }
 
@@ -675,106 +605,10 @@ fn lookup<'a>(tree: &'a Node, root: &Path, path: &Path) -> Option<&'a Node> {
     Some(node)
 }
 
-fn remove(state: &mut State, body: &Value, commit: bool) -> (u16, Value) {
-    if state.removal.as_ref().is_some_and(|job| job.done.is_none()) {
-        return (409, json!({"error": "a removal is already running"}));
-    }
-    let (Some(tree), Some(root)) = (state.tree.clone(), root_of(state)) else {
-        return (409, json!({"error": "no snapshot yet"}));
-    };
-    let mode = match body["mode"].as_str() {
-        Some("permanent") => RemovalMode::Permanent,
-        _ => RemovalMode::Trash,
-    };
-    let paths: Vec<PathBuf> = body["paths"]
-        .as_array()
-        .map(|list| {
-            list.iter()
-                .filter_map(Value::as_str)
-                .map(PathBuf::from)
-                .collect()
-        })
-        .unwrap_or_default();
-    let targets: Vec<Target> = paths
-        .iter()
-        .map(|path| {
-            let node = lookup(&tree, &root, path);
-            Target {
-                path: path.clone(),
-                bytes: node.map_or(0, |n| n.bytes),
-                is_dir: node.is_some_and(|n| n.kind.is_dir()),
-                hidden: path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with('.')),
-            }
-        })
-        .collect();
-    // The core's guards decide what may go: outside the root, the root,
-    // home, mount points and symlink targets are refused there.
-    let plan = removal::plan(&targets, &root);
-    let described = json!({
-        "mode": if mode == RemovalMode::Trash { "trash" } else { "permanent" },
-        "bytes": plan.bytes(),
-        "targets": plan.targets.iter().map(|t| json!({
-            "path": t.path.display().to_string(), "bytes": t.bytes,
-        })).collect::<Vec<_>>(),
-        "covered": plan.covered.iter().map(|t| t.path.display().to_string())
-            .collect::<Vec<_>>(),
-        "blocked": plan.blocked.iter().map(|b| json!({
-            "path": b.path.display().to_string(), "reason": b.reason,
-        })).collect::<Vec<_>>(),
-    });
-    if !commit {
-        return (200, described);
-    }
-    if plan.is_empty() {
-        return (400, json!({"error": "nothing removable", "plan": described}));
-    }
-    if mode == RemovalMode::Permanent && body["confirm"] != json!("delete") {
-        return (400, json!({"error": "permanent deletion needs confirm"}));
-    }
-    let available_before =
-        space_info(&root).map_or(0, |space| space.available);
-    state.removal = Some(RemovalJob {
-        handle: Some(removal::spawn(plan, mode)),
-        mode: if mode == RemovalMode::Trash { "trash" } else { "permanent" },
-        total: 0,
-        items: Vec::new(),
-        done: None,
-        available_before,
-    });
-    (200, described)
-}
-
-/// Every removed path, appended once per finished removal. "Came back"
-/// reads it: a path deleted before and large again is a setting or a
-/// schedule to change, not a thing to delete by hand every month.
-fn log_removals(dir: &Path, job: &RemovalJob) {
-    use std::io::Write as _;
-    let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("removals.jsonl"))
-    else {
-        return;
-    };
-    for item in &job.items {
-        if item["error"].is_null() {
-            let line = json!({
-                "at": now(), "path": item["path"], "bytes": item["bytes"],
-                "mode": job.mode,
-            });
-            let _ = writeln!(file, "{line}");
-        }
-    }
-}
-
 /// Minimum sizes for a line in each Clean up section.
 const STALE_BYTES: u64 = 1_000_000_000;
 const STALE_DAYS: i64 = 180;
 const GROWING_BYTES: i64 = 200_000_000;
-const CAME_BACK_BYTES: u64 = 50_000_000;
 
 /// The Clean up view: four reasons a directory is worth deleting, each a
 /// separate list so the reason stays attached to the size.
@@ -845,30 +679,20 @@ fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Valu
         })
         .collect();
 
-    let mut came_back = Vec::new();
-    if let Ok(text) = fs::read_to_string(dir.join("removals.jsonl")) {
-        let mut last: std::collections::BTreeMap<String, (i64, u64)> = Default::default();
-        for line in text.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-            if let (Some(p), Some(at)) = (v["path"].as_str(), v["at"].as_i64()) {
-                last.insert(p.to_string(), (at, v["bytes"].as_u64().unwrap_or(0)));
-            }
-        }
-        for (p, (at, was)) in last {
+    let came_back: Vec<Value> = store::open_read(&dir.join("disk.db"))
+        .and_then(|db| store::came_back(&db, 30))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(p, peak, trough, at, now_bytes)| {
             let path = PathBuf::from(&p);
-            if let Some(node) = lookup(tree, root, &path)
-                && node.bytes >= CAME_BACK_BYTES
-            {
-                let why = format!(
-                    "removed {} ago ({}), back to {}",
-                    age_words((now - at) / 86_400),
-                    human(was),
-                    human(node.bytes)
-                );
-                came_back.push(item(&path, node, why, true));
-            }
-        }
-    }
+            let node = lookup(tree, root, &path)?;
+            let why = format!(
+                "fell from {} to {} {} ago, back to {}",
+                human(peak as u64), human(trough as u64), age_words((now - at) / 86_400), human(now_bytes as u64)
+            );
+            Some(item(&path, node, why, false))
+        })
+        .collect();
 
     let section = |id: &str, title: &str, detail: &str, items: Vec<Value>| {
         // A path inside another listed path goes with it: counted once.
@@ -886,14 +710,14 @@ fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Valu
     };
     json!({"sections": [
         section("safe", "Safe to clear",
-            "Caches, build output and package stores: whatever wrote them writes them again.", safe),
+            "Caches, build output and package stores: whatever wrote them writes them again. Suggestions only; Guilty Spark never deletes.", safe),
         section("growing", "Growing fast",
             "What gained the most in the last 7 days of snapshots.", grew),
         section("stale", "Big and untouched",
             "1 GB or more with no writes for 6 months. Archive it or let it go.",
             stale.into_iter().take(15).map(|(_, v)| v).collect()),
         section("cameBack", "Came back",
-            "Deleted here before and large again. A setting or a schedule fixes these better than you do.",
+            "Shrank sharply and refilled. Clearing these by hand is not worth it; change the setting that fills them.",
             came_back),
     ]})
 }
@@ -934,17 +758,6 @@ fn human(bytes: u64) -> String {
         unit += 1;
     }
     if v >= 100.0 || unit == 0 { format!("{v:.0} {}", units[unit]) } else { format!("{v:.1} {}", units[unit]) }
-}
-
-fn removal_status(state: &State) -> Value {
-    state.removal.as_ref().map_or(Value::Null, |job| {
-        json!({
-            "mode": job.mode,
-            "total": job.total,
-            "items": job.items,
-            "done": job.done,
-        })
-    })
 }
 
 fn proxy(

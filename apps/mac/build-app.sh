@@ -11,7 +11,7 @@ rm -rf "$app" build/icon.iconset
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" build/icon.iconset
 
 xcrun swiftc -O -parse-as-library -swift-version 5 -target arm64-apple-macos26.0 \
-  -framework SwiftUI -framework Charts Sources/*.swift -o "$app/Contents/MacOS/GuiltySpark"
+  -framework SwiftUI Sources/*.swift -o "$app/Contents/MacOS/GuiltySpark"
 
 xcrun swift tools/icon.swift build/icon-1024.png
 for s in 16 32 128 256 512; do

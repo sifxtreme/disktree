@@ -11,12 +11,7 @@ enum ColorMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct Mark: Codable, Hashable {
-    let name: String
-    let bytes: Int64
-}
-
-/// Everything one machine shows. Marks are keyed by absolute path, so they survive a new snapshot.
+/// Everything one machine shows.
 struct HostState {
     var status: StatusDTO?
     var error: String?
@@ -27,24 +22,11 @@ struct HostState {
     var history: [PointDTO] = []
     var growth: GrowthDTO?
     var selection: String?
-    var marks: [String: Mark] = [:]
     var seenSnapshot: Int64 = 0
     var suggest: SuggestDTO?
     /// Folders visited, for Back and Forward (⌘[ ⌘]).
     var back: [String] = []
     var forward: [String] = []
-}
-
-enum ReviewStep { case choose, confirm, running, done }
-
-struct ReviewState: Identifiable {
-    let id = UUID()
-    let host: String
-    var mode: String
-    var step: ReviewStep = .choose
-    var plan: PlanDTO?
-    var job: RemovalDTO?
-    var error: String?
 }
 
 @MainActor
@@ -60,7 +42,6 @@ final class SparkModel: ObservableObject {
     // `-page "Clean up"` and `-openPath <dir>` at launch: screenshots and tests without keystrokes.
     @Published var page: Page = Page(rawValue: UserDefaults.standard.string(forKey: "page") ?? "") ?? .map
     @Published var serverUp = true
-    @Published var review: ReviewState?
     @Published var toast: String?
 
     private var started = false
@@ -104,7 +85,7 @@ final class SparkModel: ObservableObject {
             serverUp = true
             if !hosts.contains(where: { $0.id == host }) { host = "local" }
             for h in hosts where states[h.id] == nil {
-                states[h.id] = HostState(marks: loadMarks(h.id))
+                states[h.id] = HostState()
             }
         } catch {
             if Harness.enabled { print("LOG loadHosts failed: \(error)"); fflush(stdout) }
@@ -116,9 +97,9 @@ final class SparkModel: ObservableObject {
 
     func refresh(_ id: String) async {
         if hosts.isEmpty { await loadHosts() }
-        if states[id] == nil { states[id] = HostState(marks: loadMarks(id)) }
+        if states[id] == nil { states[id] = HostState() }
         // Fetch first, then change only the fields this owns. Copying the whole state before the
-        // await and writing it back after lost anything done meanwhile (Forward, marks, the node).
+        // await and writing it back after lost anything done meanwhile (Forward history, the node).
         var status: StatusDTO?
         var failure: String?
         do {
@@ -150,6 +131,13 @@ final class SparkModel: ObservableObject {
 
     func switchHost(_ id: String) {
         guard id != host else { return }
+        // Keep only what is on screen: the machine left behind keeps its status (for the sidebar)
+        // and reloads the rest when it is shown again.
+        if var old = states[host] {
+            old.node = nil; old.index = [:]; old.insights = []; old.history = []; old.growth = nil; old.suggest = nil
+            old.seenSnapshot = 0
+            states[host] = old
+        }
         host = id
         Task {
             await refresh(id)
@@ -244,13 +232,6 @@ final class SparkModel: ObservableObject {
         Task { await load(path: to, select: nil) }
     }
 
-    func markAll(_ items: [SuggestItem]) {
-        for i in items where i.markable && current.marks[i.path] == nil {
-            states[host]?.marks[i.path] = Mark(name: i.name, bytes: i.bytes)
-        }
-        saveMarks(host)
-    }
-
     func select(_ path: String?) { states[host]?.selection = path }
 
     func snapshotNow(_ id: String? = nil) {
@@ -262,108 +243,6 @@ final class SparkModel: ObservableObject {
                 show(status.scanError ?? "Snapshot started")
             } catch {
                 show("Snapshot did not start: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    // MARK: marks
-
-    func isMarked(_ path: String) -> Bool {
-        current.marks.keys.contains { path == $0 || path.hasPrefix($0 + "/") }
-    }
-
-    func toggleMark(_ path: String, name: String, bytes: Int64) {
-        guard path != current.status?.root, current.node != nil else { return }
-        if current.marks[path] != nil { states[host]?.marks[path] = nil }
-        else { states[host]?.marks[path] = Mark(name: name, bytes: bytes) }
-        saveMarks(host)
-    }
-
-    func clearMarks() {
-        states[host]?.marks = [:]
-        saveMarks(host)
-    }
-
-    /// Marked bytes, a path inside another marked path counted once.
-    var markedBytes: Int64 {
-        let keys = Array(current.marks.keys)
-        return keys.filter { p in !keys.contains { q in q != p && p.hasPrefix(q + "/") } }
-            .reduce(0) { $0 + (current.marks[$1]?.bytes ?? 0) }
-    }
-
-    func markPaths(_ id: String) -> [String] {
-        (states[id]?.marks ?? [:]).keys.sorted()
-    }
-
-    private func loadMarks(_ id: String) -> [String: Mark] {
-        if Harness.enabled { return [:] } // never the user's marks
-        guard let data = UserDefaults.standard.data(forKey: "marks.\(id)") else { return [:] }
-        return (try? JSONDecoder().decode([String: Mark].self, from: data)) ?? [:]
-    }
-
-    private func saveMarks(_ id: String) {
-        if Harness.enabled { return }
-        let data = try? JSONEncoder().encode(states[id]?.marks ?? [:])
-        UserDefaults.standard.set(data, forKey: "marks.\(id)")
-    }
-
-    // MARK: review and removal
-
-    func openReview() {
-        guard !current.marks.isEmpty else { return }
-        review = ReviewState(host: host, mode: current.status?.trashAvailable == true ? "trash" : "permanent")
-        Task { await plan() }
-    }
-
-    func plan() async {
-        guard let r = review else { return }
-        do {
-            let plan: PlanDTO = try await API.post("api/h/\(r.host)/plan",
-                                                   ["paths": markPaths(r.host), "mode": r.mode])
-            review?.plan = plan
-            review?.error = nil
-        } catch {
-            review?.error = error.localizedDescription
-        }
-    }
-
-    func unmarkInReview(_ path: String) {
-        guard let r = review else { return }
-        states[r.host]?.marks[path] = nil
-        saveMarks(r.host)
-        if states[r.host]?.marks.isEmpty ?? true { review = nil } else { Task { await plan() } }
-    }
-
-    func commit() {
-        guard !Harness.enabled else { return show("The harness never removes anything") }
-        guard let r = review else { return }
-        var body: [String: Any] = ["paths": markPaths(r.host), "mode": r.mode]
-        if r.mode == "permanent" { body["confirm"] = "delete" }
-        Task {
-            do {
-                let _: PlanDTO = try await API.post("api/h/\(r.host)/remove", body)
-            } catch {
-                review?.error = error.localizedDescription
-                review?.step = .choose
-                return
-            }
-            review?.step = .running
-            while review?.id == r.id {
-                if let job: Optionally<RemovalDTO> = try? await API.get("api/h/\(r.host)/removal"), let value = job.value {
-                    review?.job = value
-                    if value.done != nil {
-                        review?.step = .done
-                        let gone = value.items.filter { $0.error == nil }.map(\.path)
-                        for p in markPaths(r.host)
-                        where gone.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) {
-                            states[r.host]?.marks[p] = nil
-                        }
-                        saveMarks(r.host)
-                        await refresh(r.host)
-                        return
-                    }
-                }
-                try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }

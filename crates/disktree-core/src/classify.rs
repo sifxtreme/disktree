@@ -105,6 +105,11 @@ impl Reclaim {
     }
 }
 
+/// Files whose names classification reads beside a directory (`target` next to `Cargo.toml`,
+/// `node_modules` next to `package.json`, a git store's `HEAD`). A scan that folds small files must
+/// keep these, or build output and dependencies stop being recognised.
+pub const MARKER_FILES: &[&str] = &["Cargo.toml", "package.json", "HEAD"];
+
 /// The kind a directory name announces on its own, if any.
 pub fn category_of_name(name: &str) -> Option<Category> {
     let lower = name.to_ascii_lowercase();

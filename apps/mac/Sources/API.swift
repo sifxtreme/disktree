@@ -1,7 +1,8 @@
 import Foundation
 
 // The disk-web JSON API (crates/disk-web/src/main.rs). The app is a client of the local server
-// only; the server proxies other machines under /api/h/<id>/ and holds their tokens.
+// only; the server proxies other machines under /api/h/<id>/ and holds their tokens. Read-only:
+// the one POST is "take a snapshot now"; nothing in the API deletes.
 
 struct HostDTO: Codable, Identifiable, Hashable {
     let id: String
@@ -39,9 +40,6 @@ struct StatusDTO: Codable, Hashable {
     let excluded: [String]?
     let tree: TotalsDTO?
     let space: SpaceDTO?
-    let trash: String
-    let trashAvailable: Bool
-    let removing: Bool
 }
 
 struct RestDTO: Codable, Hashable {
@@ -129,47 +127,6 @@ struct SuggestSection: Codable, Hashable, Identifiable {
 
 struct SuggestDTO: Codable, Hashable {
     let sections: [SuggestSection]
-}
-
-struct PlanTarget: Codable, Hashable, Identifiable {
-    var id: String { path }
-    let path: String
-    let bytes: Int64
-}
-
-struct Blocked: Codable, Hashable, Identifiable {
-    var id: String { path }
-    let path: String
-    let reason: String
-}
-
-struct PlanDTO: Codable, Hashable {
-    let mode: String
-    let bytes: Int64
-    let targets: [PlanTarget]
-    let covered: [String]
-    let blocked: [Blocked]
-}
-
-struct RemovedItem: Codable, Hashable, Identifiable {
-    var id: String { path }
-    let path: String
-    let bytes: Int64
-    let error: String?
-}
-
-struct RemovalDone: Codable, Hashable {
-    let removed: Int64
-    let bytes: Int64
-    let failed: Int64
-    let gained: Int64
-}
-
-struct RemovalDTO: Codable, Hashable {
-    let mode: String
-    let total: Int64
-    let items: [RemovedItem]
-    let done: RemovalDone?
 }
 
 struct APIError: LocalizedError {

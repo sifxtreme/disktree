@@ -230,16 +230,10 @@ struct TreemapView: View {
                 Button("Open") { model.open(path) }
             }
             Button("Inspect") { model.select(path) }
-            let marked = model.current.marks[path] != nil
-            Button(marked ? "Unmark" : "Mark for Removal") { model.toggleMark(path, name: n.name, bytes: n.bytes) }
-                .disabled(!marked && model.isMarked(path))
             Divider()
-            Button("Show in Finder") { NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "") }
+            Button("Show in Finder") { showInFinder(path) }
                 .disabled(model.host != "local")
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(path, forType: .string)
-            }
+            Button("Copy Path") { copyPath(path) }
         }
         if model.canGoUp {
             Divider()
@@ -259,15 +253,8 @@ struct TreemapView: View {
         case .return:
             if let tile, let n = tile.node, n.dir, n.hasChildren { model.open(tile.path) }
             return .handled
-        case .space:
-            if let tile, let n = tile.node { model.toggleMark(tile.path, name: n.name, bytes: n.bytes) }
-            return .handled
         default:
             switch press.characters {
-            case "x":
-                if let tile, let n = tile.node { model.toggleMark(tile.path, name: n.name, bytes: n.bytes) }
-                return .handled
-            case "c": model.openReview(); return .handled
             case "r": model.snapshotNow(); return .handled
             default: return .ignored
             }
@@ -278,7 +265,6 @@ struct TreemapView: View {
 
     private func fill(_ tile: Tile) -> Color {
         guard let n = tile.node else { return Theme.surface2 }
-        if model.isMarked(tile.path) { return Theme.surface.mix(with: Theme.bad, by: 0.24) }
         switch model.mode {
         case .age:
             let d = n.ageDays
@@ -339,16 +325,13 @@ struct TreemapView: View {
                 }
                 continue
             }
-            let marked = model.isMarked(tile.path)
-            if marked {
-                hatch(&ctx, shape, r, Theme.bad.opacity(0.4), width: 2, gap: 7)
-            } else if n.reclaim != nil {
+            if n.reclaim != nil {
                 hatch(&ctx, shape, r, Theme.ink.opacity(0.12), width: 1.25, gap: 6)
             }
 
             if tile.nested {
                 let band = CGRect(x: r.minX, y: r.minY, width: r.width, height: tile.depth == 1 ? 24 : 17)
-                if tile.depth == 1 && !marked {
+                if tile.depth == 1 {
                     // A thin strip of the section's colour, not a filled header.
                     ctx.fill(Path(roundedRect: CGRect(x: r.minX + 7, y: r.minY + 6, width: 3, height: 12), cornerRadius: 1.5),
                              with: .color(tint(n)))

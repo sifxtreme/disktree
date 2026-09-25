@@ -604,7 +604,10 @@ fn signal_done(dir: &Arc<PendingDir>, context: &Arc<WalkContext>) {
     if dir.pending.fetch_sub(1, Ordering::AcqRel) != 1 {
         return;
     }
-    let node = dir.build();
+    let mut node = dir.build();
+    if let Some(floor) = context.options.fold_below {
+        fold_small_dir(&mut node, floor, dir.parent.is_none());
+    }
     let Some(parent) = dir.parent.clone() else {
         *lock(&context.root) = Some(node);
         return;
@@ -622,14 +625,26 @@ fn finish_tree(mut node: Node, options: &ScanOptions) -> Node {
     if options.dedup_hardlinks {
         let mut seen = FxHashSet::default();
         mark_duplicate_hardlinks(&mut node, &mut seen);
+    } else if options.fold_below.is_some() {
+        clear_dir_flags(&mut node);
     }
     aggregate(&mut node, options.metric);
     crate::classify::classify(&mut node);
     node
 }
 
+fn clear_dir_flags(node: &mut Node) {
+    if node.is_dir() {
+        node.inode = None;
+        node.children.iter_mut().for_each(clear_dir_flags);
+    }
+}
+
 fn mark_duplicate_hardlinks(node: &mut Node, seen: &mut FxHashSet<(u64, u64)>) {
-    if !node.is_dir() {
+    if node.is_dir() {
+        // Set by fold_small_dir as a "holds links" flag; a directory has no file identity.
+        node.inode = None;
+    } else {
         if node.inode.is_some_and(|key| !seen.insert(key)) {
             node.own_bytes = 0;
         }
@@ -640,13 +655,50 @@ fn mark_duplicate_hardlinks(node: &mut Node, seen: &mut FxHashSet<(u64, u64)>) {
     }
 }
 
+/// Provisional totals for a just-built directory, from its direct children (a subdirectory was given
+/// its own when it was built), and the collapse of a whole subtree under `floor` into one leaf.
+/// Millions of files live in small directories; keeping each as a node was most of a scan's peak
+/// memory. `tree::aggregate` recomputes every total at the end, so the provisional ones are only
+/// read here. A directory holding a multi-link file never collapses (hardlink de-duplication needs
+/// the file), and `inode` on a directory is used only as that "holds links" flag until
+/// `finish_tree` clears it.
+fn fold_small_dir(node: &mut Node, floor: u64, is_root: bool) {
+    let (mut bytes, mut files, mut modified, mut links) = (0_u64, 0_u64, 0_i64, false);
+    for child in &node.children {
+        if child.kind.is_dir() {
+            bytes += child.bytes;
+            files += child.files;
+            links |= child.inode.is_some();
+        } else {
+            bytes += child.own_bytes;
+            files += child.own_files;
+            links |= child.inode.is_some();
+        }
+        modified = modified.max(child.modified);
+    }
+    node.bytes = bytes;
+    node.files = files;
+    node.modified = modified;
+    node.inode = links.then_some((0, 0));
+    let has_subdirs = node.children.iter().any(|c| c.kind.is_dir());
+    if is_root || links || node.read_error || bytes >= floor || !has_subdirs {
+        return;
+    }
+    let mut folded = Node::entry(FOLDED_NAME, NodeKind::File, bytes);
+    folded.own_files = files;
+    folded.files = files;
+    folded.modified = modified;
+    node.children = if files > 0 || bytes > 0 { vec![folded] } else { Vec::new() };
+}
+
 fn fold_small(leaves: &mut Vec<Node>, floor: u64) {
     let mut folded = Node::entry(FOLDED_NAME, NodeKind::File, 0);
     folded.own_files = 0;
     leaves.retain(|leaf| {
         let small = leaf.kind == NodeKind::File
             && leaf.inode.is_none()
-            && leaf.own_bytes < floor;
+            && leaf.own_bytes < floor
+            && !crate::classify::MARKER_FILES.contains(&&*leaf.name);
         if small {
             folded.own_bytes += leaf.own_bytes;
             folded.own_files += leaf.own_files;
@@ -809,6 +861,46 @@ mod tests {
         let d = folded.child_named("d").expect("d");
         assert_eq!(d.children.len(), 2, "big + one folded leaf");
         assert_eq!(d.child_named(FOLDED_NAME).expect("folded").files, 20);
+    }
+
+    #[test]
+    fn folding_small_directories_keeps_totals_exact() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for d in ["a/b/c", "a/b/d", "e"] {
+            fs::create_dir_all(temp.path().join(d)).expect("mkdir");
+        }
+        for (f, n) in [("a/b/c/x", 4000), ("a/b/d/y", 9000), ("a/z", 100), ("e/big", 3 << 20)] {
+            fs::write(temp.path().join(f), vec![1_u8; n]).expect("file");
+        }
+        let plain = scan(temp.path(), ScanOptions::default()).expect("scan");
+        let folded = scan(
+            temp.path(),
+            ScanOptions { fold_below: Some(1 << 20), ..ScanOptions::default() },
+        )
+        .expect("scan");
+        assert_eq!(plain.bytes, folded.bytes);
+        assert_eq!(plain.files, folded.files);
+        let a = folded.child_named("a").expect("a");
+        assert_eq!(a.children.len(), 1, "the small subtree is one leaf");
+        assert_eq!(a.children[0].files, 3);
+        assert!(folded.child_named("e").expect("e").child_named("big").is_some(), "large stays");
+    }
+
+    #[test]
+    fn folding_keeps_the_files_classification_reads() {
+        use crate::classify::Reclaim;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let crate_dir = temp.path().join("app");
+        fs::create_dir_all(crate_dir.join("target")).expect("mkdir");
+        fs::write(crate_dir.join("Cargo.toml"), b"[package]").expect("manifest");
+        fs::write(crate_dir.join("target/out"), vec![1_u8; 2 << 20]).expect("out");
+        let tree = scan(
+            temp.path(),
+            ScanOptions { fold_below: Some(1 << 20), ..ScanOptions::default() },
+        )
+        .expect("scan");
+        let target = tree.child_named("app").and_then(|a| a.child_named("target")).expect("target");
+        assert_eq!(target.reclaim, Some(Reclaim::BuildOutput), "Cargo.toml was folded away");
     }
     use crate::tree::Metric;
     use std::fs;

@@ -1,5 +1,10 @@
 # Guilty Spark (work name: `disk`)
 
+> **Hard rule (Asif, 2026-09-24): Guilty Spark never deletes anything. It only suggests.** No
+> endpoint, button, key or menu item may remove, trash or move a file. Suggestions offer Show in
+> Finder and Copy Path; the delete happens outside the tool. The UI harness asks the server for
+> `remove`, `plan`, `removal`, `delete` and `trash` and fails unless each is a 404.
+
 This fork of [tobi/disktree](https://github.com/tobi/disktree) adds hourly disk snapshots on macOS and a
 browser UI in Cortana's visual language. The UI shows every machine from one page. Today that is the
 laptop and the Forge box (`mac-server`).
@@ -14,7 +19,7 @@ Our additions:
 | `crates/disk-web/src/store.rs` | The SQLite schema and the pruned-tree codec. |
 | `apps/mac/` | The native Mac app (SwiftUI, Canvas treemap). It holds no grant. |
 | `packaging/macos/{sign,install}.sh` | Signs both binaries, then installs the two agents. |
-| core: `ScanOptions::exclude`, `TrashBackend::MacTrash` | `exclude` lists a directory without opening it. `MacTrash` uses `/usr/bin/trash`, so Put Back works in Finder. |
+| core: `ScanOptions::exclude`, `ScanOptions::fold_below`, `classify::MARKER_FILES` | `exclude` lists a directory without opening it. `fold_below` sums small files and small directory subtrees into one leaf (snapper peak 923 MB → 146 MB, totals exact), never folding the files classification reads (`Cargo.toml`, `package.json`, `HEAD`). |
 
 ## Where the data is
 
@@ -73,4 +78,4 @@ The app uses Cortana's `Theme` names and a verbatim copy of its generated tokens
 - The laptop server binds only to loopback. It refuses a `Host` header that is not loopback (DNS rebinding).
 - Each POST must carry an `X-Disk` header, so another site's page cannot post to it without a CORS preflight, and nothing answers one.
 - Forge binds only to its Tailscale IP and requires `X-Disk-Token` on every API call. The token file is 0600 on Forge, and a copy sits on the laptop.
-- The core's guards decide what can be removed: nothing outside the root, not the root itself, not home, not mount points. Permanent delete needs a second confirmation. Trash is the default.
+- Nothing deletes. The server's only POST is `scan` (take a snapshot now); the harness fails if a delete endpoint appears.

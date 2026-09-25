@@ -304,6 +304,58 @@ pub fn growth(
     Ok(json!({"items": items, "baseAt": base_at}))
 }
 
+/// Directories that shrank sharply and then refilled, from snapshot history: a cache that clears
+/// itself (or was cleared) and comes back. Whoever cleared it, deleting it again by hand is not
+/// worth it; a setting is. A path missing from a snapshot was under the `dirs` floor there, so it
+/// counts as empty.
+pub fn came_back(db: &Connection, days: i64) -> rusqlite::Result<Vec<(String, i64, i64, i64, i64)>> {
+    let Some(latest) = latest_id(db)? else { return Ok(Vec::new()) };
+    let latest_at: i64 = db.query_row("SELECT taken_at FROM snapshots WHERE id = ?1", params![latest], |r| r.get(0))?;
+    let since = latest_at - days * 86_400;
+    let mut q = db.prepare(
+        "SELECT id, taken_at FROM snapshots WHERE taken_at >= ?1
+           AND EXISTS (SELECT 1 FROM dirs WHERE snapshot_id = snapshots.id) ORDER BY taken_at",
+    )?;
+    let runs: Vec<(i64, i64)> = q.query_map(params![since], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    if runs.len() < 3 {
+        return Ok(Vec::new());
+    }
+    let mut q = db.prepare(
+        "SELECT d.path, d.snapshot_id, d.bytes FROM dirs d JOIN snapshots s ON s.id = d.snapshot_id
+         WHERE s.taken_at >= ?1 AND d.depth >= 1 AND d.path IN
+           (SELECT path FROM dirs WHERE snapshot_id = ?2 AND bytes >= 200000000)",
+    )?;
+    let mut series: std::collections::HashMap<String, std::collections::HashMap<i64, i64>> = Default::default();
+    for row in q.query_map(params![since, latest], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
+        let (path, id, bytes) = row?;
+        series.entry(path).or_default().insert(id, bytes);
+    }
+    let mut out = Vec::new();
+    for (path, by_run) in series {
+        let now = by_run.get(&latest).copied().unwrap_or(0);
+        let (mut peak, mut trough, mut trough_at, mut best) = (0_i64, i64::MAX, 0_i64, None);
+        let mut seen = false;
+        for (id, at) in &runs {
+            let v = by_run.get(id).copied();
+            if v.is_some() { seen = true }
+            if !seen { continue }
+            let v = v.unwrap_or(0);
+            if v > peak { peak = v; trough = i64::MAX; }
+            if v < trough { trough = v; trough_at = *at; }
+            if peak - trough >= 200_000_000 && trough * 2 <= peak {
+                best = Some((peak, trough, trough_at));
+            }
+        }
+        if let Some((peak, trough, at)) = best
+            && now * 10 >= peak * 8
+        {
+            out.push((path, peak, trough, at, now));
+        }
+    }
+    out.sort_by_key(|x| std::cmp::Reverse(x.4));
+    Ok(out)
+}
+
 // ---- the tree codec: compact arrays, children pruned below a floor ----
 //
 // [name, kind, bytes, files, dirs, modified, category, reclaim, unreadable,

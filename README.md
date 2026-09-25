@@ -1,25 +1,27 @@
 # disktree
 
-> **This fork adds Guilty Spark: a macOS version with hourly history.**
-> Upstream disktree is a GPUI app for Omarchy (Linux). This fork keeps its core
-> (`disktree-core`: scanning, layout, the removal guards) and adds these macOS parts:
+> **This fork adds Guilty Spark: a read-only macOS disk advisor with hourly history.**
+> Upstream disktree is a GPUI app for Omarchy (Linux) that marks and removes files.
+> This fork keeps its core (`disktree-core`: scanning, layout, classification) and adds
+> macOS parts that **only suggest; nothing in them deletes anything**:
 >
 > - **`disk-snap`**: a launchd agent that scans `$HOME` every hour. It writes each
->   snapshot into SQLite (`~/Library/Application Support/disk/disk.db`), with
->   free space over time and per-directory sizes, so you can ask "what grew?".
->   It is the only process that needs Full Disk Access. It has no network and no delete.
->   Without the grant, it skips the folders that would raise a privacy dialog.
-> - **`disk-web`**: a small local API server over that database. It can
->   proxy other machines, with a token, so one window shows several Macs.
-> - **Guilty Spark.app**: a native SwiftUI app. It has a Canvas treemap, an
->   inspector (selection, disk, 7-day free space, what changed, worth a look),
->   a review sheet (Trash by default, permanent delete asks twice) and a
->   menu-bar free-space readout. The same UI is also a browser page at
->   `http://127.0.0.1:7321`.
+>   snapshot into SQLite (`~/Library/Application Support/disk/disk.db`), with free
+>   space over time and per-directory sizes. It is the only process that needs Full Disk
+>   Access; it has no network and no delete. Without the grant, it skips the folders
+>   that would raise a privacy dialog.
+> - **`disk-web`**: a small local read-only API over that database. It can proxy other
+>   machines, with a token, so one window shows several Macs. Its only POST is "take a
+>   snapshot now".
+> - **Guilty Spark.app**: a native SwiftUI app. It has a Canvas treemap you click into
+>   and back out of, an inspector, and a **Clean up** page that ranks what to delete and
+>   why: safe to clear, growing fast, big and untouched, came back. Every suggestion
+>   offers Show in Finder and Copy Path; the delete is yours. The same view is also a
+>   browser page at `http://127.0.0.1:7321`.
 > - **Core additions**: `ScanOptions::exclude` lists a directory without opening it.
->   `ScanOptions::fold_below` sums small files into one leaf per directory, which
->   cut peak memory from 923 MB to 362 MB on a 2.9M-file home. A `MacTrash` backend
->   uses `/usr/bin/trash`, so Finder's Put Back works.
+>   `ScanOptions::fold_below` sums small files and small directory subtrees into one
+>   leaf, keeping the files classification reads. That cut the snapper's peak memory
+>   from 923 MB to 146 MB on a 2.9M-file home, with exact totals.
 >
 > Install, how it works, and the safety model: **[GUILTY-SPARK.md](GUILTY-SPARK.md)**.
 >
@@ -27,6 +29,7 @@
 > cargo build --release -p disk-web && sh packaging/macos/sign.sh
 > sh packaging/macos/install.sh local        # hourly snapshots + API on 127.0.0.1:7321
 > apps/mac/build-app.sh                       # ~/Applications/Guilty Spark.app
+> apps/mac/harness/run.sh                     # UI harness: drives the app, checks, screenshots
 > ```
 >
 > Then grant Full Disk Access to `~/.local/bin/disk-snap` (System Settings →

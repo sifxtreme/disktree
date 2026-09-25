@@ -1,7 +1,6 @@
 // Guilty Spark web client (work name: disk). One page, every machine: the local server answers for
-// this one and proxies its peers under /api/h/<id>/…. Marks never delete
-// anything; only the review sheet's commit does, and the server re-checks every
-// path against disktree-core's removal guards.
+// this one and proxies its peers under /api/h/<id>/…. Read-only by design:
+// Guilty Spark suggests what to delete and never deletes anything itself.
 'use strict';
 
 const $ = (sel) => document.querySelector(sel);
@@ -20,31 +19,19 @@ const S = {
   hover: null,      // path under the pointer
   pointerLast: false,
   tiles: new Map(), // path → tile info for the drawn view
-  sheet: null,      // review sheet state
 };
 
 function hostState(id) {
   if (!S.per[id]) {
     S.per[id] = {
       status: null, error: null, node: null, path: null, sel: null,
-      insights: [], marks: loadMarks(id), scannedAt: 0, loading: false,
+      insights: [], scannedAt: 0, loading: false,
     };
   }
   return S.per[id];
 }
 const cur = () => hostState(S.host);
 const hostLabel = (id) => (S.hosts.find((h) => h.id === id) || {}).label || id;
-
-// ---- storage: marks are a per-viewer convenience, so browser storage ----
-function loadMarks(id) {
-  try {
-    const raw = localStorage.getItem('disk.marks.' + id);
-    return new Map(raw ? JSON.parse(raw) : []);
-  } catch { return new Map(); }
-}
-function saveMarks(id) {
-  try { localStorage.setItem('disk.marks.' + id, JSON.stringify([...hostState(id).marks])); } catch { /* private window */ }
-}
 
 // ---- formatting ----
 function bytes(n) {
@@ -274,11 +261,6 @@ function tint(tile, node, depth) {
   }
 }
 
-function isMarked(path) {
-  for (const m of cur().marks.keys()) if (path === m || path.startsWith(m + '/')) return true;
-  return false;
-}
-
 function drawMap() {
   const map = $('#map');
   const h = cur();
@@ -311,7 +293,6 @@ function drawMap() {
       if (c.dir) tile.classList.add('dir');
       if (depth === 1) tile.classList.add('top');
       if (c.reclaim) tile.classList.add('reclaim');
-      if (isMarked(path)) tile.classList.add('marked');
       if (path === h.sel) tile.classList.add('sel');
       S.tiles.set(path, { node: c, path });
 
@@ -430,7 +411,6 @@ function renderChrome() {
       v.append(b);
     }
   }
-  renderMarks();
   renderDisk();
 }
 
@@ -466,7 +446,6 @@ function renderLegend() {
     }
   }
   const hatch = el('span'); hatch.append(el('i', 'hatch'), 'reclaimable'); l.append(hatch);
-  const mk = el('span'); mk.append(el('i', 'marked'), 'marked'); l.append(mk);
 }
 
 function renderSelection() {
@@ -497,14 +476,6 @@ function renderSelection() {
   if (n.dir && !isRoot) {
     const open = el('button', 'btn', 'Open'); open.onclick = () => loadNode(info.path, null); actions.append(open);
   }
-  if (!isRoot) {
-    const marked = h.marks.has(info.path);
-    const covered = !marked && isMarked(info.path);
-    const mark = el('button', 'btn' + (marked ? ' danger' : ''), marked ? 'Unmark' : covered ? 'Goes with parent' : 'Mark');
-    mark.disabled = covered;
-    mark.onclick = () => toggleMark(info.path, n);
-    actions.append(mark);
-  }
   const copy = el('button', 'btn', 'Copy path');
   copy.onclick = async () => { try { await navigator.clipboard.writeText(info.path); toast('Path copied'); } catch { toast('Copy failed'); } };
   actions.append(copy);
@@ -516,33 +487,17 @@ function renderDisk() {
   card.replaceChildren(el('h3', null, 'Disk'));
   if (!st || !st.space) { card.append(el('div', 'muted', h.error ? 'No answer.' : '—')); return; }
   const { total, available } = st.space;
-  const marked = markedBytes();
   const used = total - available;
   const meter = el('div', 'meter');
   const freeShare = available / total;
   if (freeShare < 0.1) meter.classList.add('bad'); else if (freeShare < 0.2) meter.classList.add('warn');
   const u = el('i', 'used'); u.style.width = (100 * used / total) + '%';
   meter.append(u);
-  if (marked) {
-    const f = el('i', 'freed');
-    f.style.left = (100 * Math.max(0, used - marked) / total) + '%';
-    f.style.width = (100 * Math.min(marked, used) / total) + '%';
-    meter.append(f);
-  }
   const s1 = el('div', 'split');
   const a = el('span'); a.append('Free now ', el('b', null, bytes(available)));
   const b = el('span', null, `${bytes(total)} total`);
   s1.append(a, b);
   card.append(meter, s1);
-  if (marked) {
-    const s2 = el('div', 'split');
-    const c = el('span'); c.append('After marks ', el('b', null, bytes(available + marked)));
-    s2.append(c, el('span', null, 'projected'));
-    card.append(s2);
-  }
-  const trash = el('div', 'muted', `Trash: ${st.trash}`);
-  trash.style.fontSize = 'var(--text-xs)';
-  card.append(trash);
 }
 
 function renderLook() {
@@ -563,12 +518,6 @@ function renderLook() {
     const t = el('div', 't');
     t.append(el('b', null, item.name || baseName(item.path)), el('span', null, item.why));
     li.append(t, el('span', 's', bytes(item.bytes)));
-    const x = el('button', 'x' + (h.marks.has(item.path) ? ' on' : ''), h.marks.has(item.path) ? '✕' : '＋');
-    x.title = item.markable ? (h.marks.has(item.path) ? 'Unmark' : 'Mark') : 'Open it and choose what goes';
-    x.disabled = !item.markable;
-    if (!item.markable) x.style.visibility = 'hidden';
-    x.onclick = (e) => { e.stopPropagation(); toggleMark(item.path, { name: item.name, bytes: item.bytes }); };
-    li.append(x);
     li.onclick = () => loadNode(parentOf(item.path), item.path);
     list.append(li);
   }
@@ -579,40 +528,6 @@ function renderLook() {
     more.onclick = () => { card.dataset.all = expanded ? '0' : '1'; renderLook(); };
     card.append(more);
   }
-}
-
-function markedBytes() {
-  const marks = [...cur().marks.keys()];
-  return marks.filter((p) => !marks.some((q) => q !== p && p.startsWith(q + '/')))
-    .reduce((s, p) => s + (cur().marks.get(p).bytes || 0), 0);
-}
-
-function renderMarks() {
-  const card = $('#markcard'), h = cur();
-  const n = h.marks.size;
-  $('#markcount').textContent = n ? ` ${n} · ${bytes(markedBytes())}` : '';
-  $('#reviewbtn').disabled = !n || !h.status || !!h.error;
-  card.hidden = !n;
-  if (!n) return;
-  card.replaceChildren();
-  const top = el('div', 'top');
-  const clear = el('button', 'linkbtn', 'Clear');
-  clear.onclick = () => { h.marks.clear(); saveMarks(S.host); afterMarkChange(); };
-  top.append(el('h3', null, `Marked · ${bytes(markedBytes())}`), el('div', 'sp'), clear);
-  const list = el('div', 'list');
-  for (const [path, m] of h.marks) {
-    const li = el('div', 'li');
-    const t = el('div', 't');
-    t.append(el('b', null, m.name || baseName(path)), el('span', null, parentOf(path)));
-    const x = el('button', 'x on', '✕'); x.title = 'Unmark';
-    x.onclick = (e) => { e.stopPropagation(); toggleMark(path, m); };
-    li.append(t, el('span', 's', bytes(m.bytes)), x);
-    li.onclick = () => loadNode(parentOf(path), path);
-    list.append(li);
-  }
-  const review = el('button', 'btn primary', 'Review…');
-  review.onclick = openReview;
-  card.append(top, list, review);
 }
 
 function render() {
@@ -627,19 +542,6 @@ function render() {
 }
 
 // ---- actions ----
-function toggleMark(path, node) {
-  const h = cur();
-  if (!h.node || path === h.status.root) return;
-  if (h.marks.has(path)) h.marks.delete(path);
-  else h.marks.set(path, { name: node.name || baseName(path), bytes: node.bytes || 0 });
-  saveMarks(S.host);
-  afterMarkChange();
-}
-function afterMarkChange() {
-  for (const tile of $('#map').querySelectorAll('.tile[data-path]')) tile.classList.toggle('marked', isMarked(tile.dataset.path));
-  renderSelection(); renderMarks(); renderDisk(); renderLook();
-}
-
 function select(path) {
   const h = cur();
   h.sel = path;
@@ -672,152 +574,6 @@ function up() {
   const h = cur();
   if (!h.node || !h.status || h.node.path === h.status.root) return;
   loadNode(parentOf(h.node.path), h.node.path);
-}
-
-// ---- review sheet ----
-async function openReview() {
-  const h = cur();
-  if (!h.marks.size) return;
-  const trashOk = h.status && h.status.trashAvailable;
-  S.sheet = { step: 'choose', mode: trashOk ? 'trash' : 'permanent', plan: null, error: null, job: null, host: S.host };
-  $('#scrim').hidden = false;
-  await planReview();
-}
-
-async function planReview() {
-  const sh = S.sheet;
-  try {
-    sh.plan = await api(sh.host, 'plan', { body: { paths: [...hostState(sh.host).marks.keys()], mode: sh.mode } });
-    sh.error = null;
-  } catch (e) { sh.error = e.message; }
-  drawSheet();
-}
-
-function closeSheet() {
-  if (S.sheet && S.sheet.step === 'running') return;
-  S.sheet = null;
-  $('#scrim').hidden = true;
-  $('#map').focus();
-}
-
-function drawSheet() {
-  const sh = S.sheet, box = $('#sheet');
-  if (!sh) return;
-  box.replaceChildren();
-  const h = hostState(sh.host), st = h.status;
-  const plan = sh.plan;
-  const title = el('h2', null, `Remove from ${hostLabel(sh.host)}`);
-  title.id = 'sheettitle';
-  box.append(title);
-
-  if (sh.error) box.append(el('div', 'banner bad', sh.error));
-  if (!plan && !sh.error) { box.append(el('div', 'spinner')); return; }
-
-  if (sh.step === 'choose' || sh.step === 'confirm') {
-    box.append(el('p', 'lede', `${plan.targets.length} item${plan.targets.length === 1 ? '' : 's'} · ${bytes(plan.bytes)}. Nothing has been touched yet.`));
-    const list = el('div', 'list');
-    for (const t of plan.targets) {
-      const li = el('div', 'li');
-      const tt = el('div', 't'); tt.append(el('b', null, baseName(t.path)), el('span', null, parentOf(t.path)));
-      const x = el('button', 'x', '✕'); x.title = 'Unmark';
-      x.onclick = async () => { h.marks.delete(t.path); saveMarks(sh.host); afterMarkChange(); if (!h.marks.size) return closeSheet(); await planReview(); };
-      li.append(tt, el('span', 's', bytes(t.bytes)), x);
-      list.append(li);
-    }
-    box.append(list);
-    if (plan.covered.length) box.append(el('div', 'muted', `${plan.covered.length} marked path${plan.covered.length === 1 ? ' goes' : 's go'} with a folder above; counted once.`));
-    if (plan.blocked.length) {
-      const b = el('div', 'banner warn');
-      b.append(el('b', null, `${plan.blocked.length} will not be touched`));
-      for (const x of plan.blocked) b.append(el('div', 'mono', `${x.path}: ${x.reason}`));
-      box.append(b);
-    }
-  }
-
-  if (sh.step === 'choose') {
-    const choice = el('div', 'choice');
-    const opt = (value, label, detail, disabled, danger) => {
-      const l = el('label', danger ? 'danger' : '');
-      const input = el('input'); input.type = 'radio'; input.name = 'mode'; input.value = value;
-      input.checked = sh.mode === value; input.disabled = disabled;
-      input.onchange = () => { sh.mode = value; drawSheet(); };
-      l.append(input, el('span', null, label), el('small', null, detail));
-      return l;
-    };
-    choice.append(
-      opt('trash', 'Move to Trash', st && st.trashAvailable ? `${st.trash}: recoverable until the Trash is emptied.` : 'No trash on this machine.', !(st && st.trashAvailable)),
-      opt('permanent', 'Delete permanently', 'rm -rf. Cannot be undone. Asks once more.', false, true),
-    );
-    box.append(choice);
-    const foot = el('div', 'foot');
-    const cancel = el('button', 'btn', 'Cancel'); cancel.onclick = closeSheet;
-    const go = el('button', sh.mode === 'trash' ? 'btn primary' : 'btn danger',
-      sh.mode === 'trash' ? `Move to Trash · ${bytes(plan.bytes)}` : 'Delete permanently…');
-    go.disabled = !plan.targets.length;
-    go.onclick = () => { if (sh.mode === 'trash') commit(); else { sh.step = 'confirm'; drawSheet(); } };
-    foot.append(el('div', 'sp'), cancel, go);
-    box.append(foot);
-    setTimeout(() => go.focus(), 0);
-  } else if (sh.step === 'confirm') {
-    box.append(el('div', 'banner bad', `This deletes ${plan.targets.length} item${plan.targets.length === 1 ? '' : 's'} and ${bytes(plan.bytes)} on ${hostLabel(sh.host)}, now. There is no undo.`));
-    const foot = el('div', 'foot');
-    const back = el('button', 'btn', 'Back'); back.onclick = () => { sh.step = 'choose'; drawSheet(); };
-    const go = el('button', 'btn danger solid', 'Delete permanently'); go.onclick = commit;
-    foot.append(el('div', 'sp'), back, go);
-    box.append(foot);
-    setTimeout(() => back.focus(), 0);
-  } else if (sh.step === 'running' || sh.step === 'done') {
-    const job = sh.job || { items: [], total: plan.targets.length };
-    const done = job.done;
-    if (!done) {
-      const row = el('div', 'status-line');
-      row.style.cssText = 'display:flex;gap:10px;align-items:center';
-      row.append(el('div', 'spinner'), el('span', 'num', `${job.items.length} of ${job.total || plan.targets.length}`));
-      box.append(row);
-    } else {
-      const failed = job.items.filter((i) => i.error);
-      const gained = done.gained;
-      box.append(el('div', 'banner ' + (failed.length ? 'warn' : 'good'),
-        `${sh.mode === 'trash' ? 'Moved to Trash' : 'Deleted'}: ${done.removed} of ${job.total}, ${bytes(done.bytes)} as measured by the scan. ` +
-        (sh.mode === 'trash' ? 'The disk frees it when the Trash is emptied.' :
-          `The disk reports ${bytes(gained)} more free${gained < done.bytes * 0.8 ? ' (snapshots or hardlinks may still hold the rest)' : ''}.`)));
-      for (const f of failed) box.append(el('div', 'mono banner bad', `${f.path}: ${f.error}`));
-      box.append(el('div', 'muted', 'A fresh snapshot is running so the map matches the disk.'));
-      const foot = el('div', 'foot');
-      const ok = el('button', 'btn primary', 'Done'); ok.onclick = closeSheet;
-      foot.append(el('div', 'sp'), ok);
-      box.append(foot);
-      setTimeout(() => ok.focus(), 0);
-    }
-  }
-}
-
-async function commit() {
-  const sh = S.sheet, h = hostState(sh.host);
-  const body = { paths: [...h.marks.keys()], mode: sh.mode };
-  if (sh.mode === 'permanent') body.confirm = 'delete';
-  try {
-    await api(sh.host, 'remove', { body });
-  } catch (e) { sh.error = e.message; sh.step = 'choose'; return drawSheet(); }
-  sh.step = 'running';
-  drawSheet();
-  const tick = async () => {
-    try { sh.job = await api(sh.host, 'removal'); } catch (e) { sh.error = e.message; }
-    if (sh.job && sh.job.done) {
-      sh.step = 'done';
-      for (const item of sh.job.items) if (!item.error) h.marks.delete(item.path);
-      // A path covered by a removed folder is gone too.
-      for (const p of [...h.marks.keys()]) if (sh.job.items.some((i) => !i.error && p.startsWith(i.path + '/'))) h.marks.delete(p);
-      saveMarks(sh.host);
-      drawSheet();
-      afterMarkChange();
-      refreshStatus(sh.host);
-      return;
-    }
-    drawSheet();
-    setTimeout(tick, 500);
-  };
-  tick();
 }
 
 // ---- toast ----
@@ -876,20 +632,15 @@ function wire() {
     };
   }
   $('#rescan').onclick = rescan;
-  $('#reviewbtn').onclick = openReview;
-  $('#scrim').addEventListener('click', (e) => { if (e.target.id === 'scrim') closeSheet(); });
 
   document.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (S.sheet) { if (e.key === 'Escape') closeSheet(); return; }
     if (e.target.matches && e.target.matches('input, textarea')) return;
     const h = cur();
     const target = S.pointerLast && S.hover ? S.hover : h.sel;
     const info = target && S.tiles.get(target);
     if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); up(); }
     else if (e.key === 'Enter' && info && info.node.dir && info.path !== h.node.path) loadNode(info.path, null);
-    else if ((e.key === 'x' || e.key === ' ') && info && info.path !== h.node.path) { e.preventDefault(); toggleMark(info.path, info.node); }
-    else if (e.key === 'c') openReview();
     else if (e.key === 'r') rescan();
     else if (/^[1-9]$/.test(e.key) && S.hosts[+e.key - 1]) switchHost(S.hosts[+e.key - 1].id);
   });
