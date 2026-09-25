@@ -1437,6 +1437,7 @@ dependencies = [
  "disktree-core",
  "rusqlite",
  "serde_json",
+ "tempfile",
  "tiny_http",
  "ureq",
 ]

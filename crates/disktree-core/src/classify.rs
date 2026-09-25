@@ -105,9 +105,11 @@ impl Reclaim {
     }
 }
 
-/// Files whose names classification reads beside a directory (`target` next to `Cargo.toml`,
-/// `node_modules` next to `package.json`, a git store's `HEAD`). A scan that folds small files must
-/// keep these, or build output and dependencies stop being recognised.
+/// Files whose names classification reads beside a directory.
+///
+/// `target` counts as build output next to `Cargo.toml`, `node_modules` as
+/// reinstallable next to `package.json`, and a git store needs `HEAD`. A scan
+/// that folds small files must keep these, or those kinds stop being seen.
 pub const MARKER_FILES: &[&str] = &["Cargo.toml", "package.json", "HEAD"];
 
 /// The kind a directory name announces on its own, if any.

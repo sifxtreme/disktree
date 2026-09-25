@@ -44,6 +44,25 @@ delete endpoint, measures memory (budget 150 MB), and takes window-only screensh
 tests a build before installing. Bugs it found are listed in the commit history; the worst was an
 intermittent crash on resize inside the system `.inspector` column, now a plain panel.
 
+## Verifying these claims
+
+Every claim here has a command. A claim whose check has not been run reads UNVERIFIED, never ✅.
+
+| Claim | Check | Last result |
+|---|---|---|
+| Nothing can delete | `cargo test -p disk-web no_route` (routes answer 404 for remove, plan, removal, delete, trash, move, cleanup; any method). The UI harness also asks the live server. | pass 2026-09-24. Shown to fail: with a fake `remove` route it failed ("POST remove answered 200"). |
+| Totals are exact with folding | `cargo test -p disktree-core folding` | pass 2026-09-24, 3 tests |
+| Folding keeps build output and `node_modules` recognisable | `cargo test -p disktree-core folding_keeps` | pass. Shown to fail without the fix. |
+| Growing fast names the directory, not its parents; Came back finds refills only; history thins after 14 days | `cargo test -p disk-web store::` | pass 2026-09-24, 7 tests |
+| The app works end to end, including resizing below the minimum | `apps/mac/harness/run.sh` (20+ checks, screenshots) | soak: 15/15 clean, no crash reports (2026-09-24); 18 in a row since the inspector fix, 9 of 9 crashed before it |
+| The app stays under 150 MB | same harness | 76–79 MB in the soak |
+| Snapper peak memory | `/usr/bin/time -l ~/.local/bin/disk-snap --dir /tmp/x` | 146 MB, 2.9M files, 19 s (2026-09-24) |
+| Snapshots run hourly on both machines | `sqlite3 ~/Library/Application\ Support/disk/disk.db "select datetime(taken_at,'unixepoch','localtime') from snapshots"` | hourly since 16:32 (laptop) and 16:45 (Forge), 2026-09-24. One laptop run took 40 min at load 138; launchd skips an hour rather than overlap. |
+| Full Disk Access survives rebuilds | `launchctl submit -l probe -- ~/.local/bin/disk-snap --probe` | true on both, after 4 rebuilds (2026-09-24) |
+| Browser page works on desktop and phone, read-only | `PLAYWRIGHT=… node crates/disk-web/web-check.mjs` | 13/13 pass (2026-09-24) |
+| Growing fast and Came back are useful on real data | the week check: `curl -s 127.0.0.1:7321/api/h/local/suggest` after 7 days of snapshots | UNVERIFIED (needs history until 2026-10-01) |
+| Strict lints | `cargo clippy -p disk-web -p disktree-core --all-targets -- -D warnings` | 0 findings (2026-09-24). The upstream GPUI app was not built here (Linux only). |
+
 ## Where the data is
 
 `~/Library/Application Support/disk/disk.db` is on each machine. It is not synced (two writers on one

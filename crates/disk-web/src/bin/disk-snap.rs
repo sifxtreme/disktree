@@ -61,7 +61,9 @@ fn main() {
                 return;
             }
             _ => {
-                eprintln!("usage: disk-snap [--root DIR] [--dir STATE_DIR] | --probe");
+                eprintln!(
+                    "usage: disk-snap [--root DIR] [--dir STATE_DIR] | --probe"
+                );
                 std::process::exit(2);
             }
         }
@@ -74,7 +76,9 @@ fn main() {
 
 fn run(root: &Path, home: &Path, dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let root = root.canonicalize().map_err(|e| format!("{}: {e}", root.display()))?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", root.display()))?;
     let fda = full_disk_access(home);
     let excluded: Vec<PathBuf> = if fda {
         Vec::new()
@@ -153,7 +157,11 @@ fn run(root: &Path, home: &Path, dir: &Path) -> Result<(), String> {
         tree.bytes,
         tree.files,
         started.elapsed().as_secs_f64(),
-        if fda { "" } else { ", partial (no Full Disk Access)" }
+        if fda {
+            ""
+        } else {
+            ", partial (no Full Disk Access)"
+        }
     );
     Ok(())
 }
@@ -167,7 +175,9 @@ fn full_disk_access(home: &Path) -> bool {
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs() as i64)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 fn hostname() -> String {

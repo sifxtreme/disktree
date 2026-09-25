@@ -112,7 +112,7 @@ fn main() {
     }
 }
 
-fn usage() -> &'static str {
+const fn usage() -> &'static str {
     "usage: disk-web [--bind ADDR:PORT] [--dir STATE_DIR] [--label NAME]
                     [--token-file FILE]
                     [--peer ID=URL[,LABEL][,TOKEN_FILE]]...
@@ -135,9 +135,8 @@ fn parse_args() -> Result<Config, String> {
     };
     let mut args = env::args().skip(1);
     while let Some(flag) = args.next() {
-        let mut value = || {
-            args.next().ok_or_else(|| format!("{flag} needs a value"))
-        };
+        let mut value =
+            || args.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
             "--bind" => config.bind = value()?,
             "--dir" => config.dir = PathBuf::from(value()?),
@@ -204,7 +203,9 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs() as i64)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 /// Ask launchd to take a snapshot now. `kickstart` without `-k` does
@@ -319,9 +320,9 @@ fn api(
     if path == "/api/hosts" {
         let mut hosts =
             vec![json!({"id": "local", "label": config.label, "local": true})];
-        hosts.extend(config.peers.iter().map(|peer| {
-            json!({"id": peer.id, "label": peer.label, "local": false})
-        }));
+        hosts.extend(config.peers.iter().map(
+            |peer| json!({"id": peer.id, "label": peer.label, "local": false}),
+        ));
         let _ = request.respond(reply(200, &json!({"hosts": hosts})));
         return;
     }
@@ -333,8 +334,7 @@ fn api(
     let (host, action) = rest.split_once('/').unwrap_or((rest, ""));
 
     let response = if host == "local" {
-        let (status, value) =
-            local(request.method(), action, query, state);
+        let (status, value) = local(request.method(), action, query, state);
         reply(status, &value)
     } else if let Some(peer) = config.peers.iter().find(|p| p.id == host) {
         let raw_query = request.url().split_once('?').map(|(_, q)| q);
@@ -370,14 +370,18 @@ fn local(
             })
         }
         (Method::Get, "growth") => {
-            let hours: i64 =
-                query.get("hours").and_then(|h| h.parse().ok()).unwrap_or(24);
+            let hours: i64 = query
+                .get("hours")
+                .and_then(|h| h.parse().ok())
+                .unwrap_or(24);
             let dir = guard.dir.clone();
             drop(guard);
             db_read(&dir, |db| store::growth(db, hours, 12))
         }
         (Method::Get, "suggest") => {
-            let (Some(tree), Some(meta)) = (guard.tree.clone(), guard.meta.clone()) else {
+            let (Some(tree), Some(meta)) =
+                (guard.tree.clone(), guard.meta.clone())
+            else {
                 return (409, json!({"error": "no snapshot yet"}));
             };
             let dir = guard.dir.clone();
@@ -486,9 +490,7 @@ fn node_response(
     let trail: Vec<Value> = chain
         .iter()
         .enumerate()
-        .map(|(i, n)| {
-            json!({"name": &*n.name, "crumbs": crumbs[..i].to_vec()})
-        })
+        .map(|(i, n)| json!({"name": &*n.name, "crumbs": crumbs[..i].to_vec()}))
         .collect();
     let path = disktree_core::tree::path_of(root, tree, &crumbs);
     let mut out = to_json(node, &crumbs, depth, floor, now());
@@ -516,7 +518,7 @@ fn to_json(
         "modified": node.modified,
         "ageDays": if node.modified > 0 { (now - node.modified) / 86_400 } else { -1 },
         "category": store::category_id(node.category),
-        "reclaim": node.reclaim.map(|r| r.label()),
+        "reclaim": node.reclaim.map(disktree_core::classify::Reclaim::label),
         "readError": node.read_error,
         "hasChildren": !node.children.is_empty(),
     });
@@ -612,7 +614,12 @@ const GROWING_BYTES: i64 = 200_000_000;
 
 /// The Clean up view: four reasons a directory is worth deleting, each a
 /// separate list so the reason stays attached to the size.
-fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Value {
+fn suggest(
+    tree: &Node,
+    meta: &store::Meta,
+    dir: &Path,
+    growing: &Value,
+) -> Value {
     let root = &meta.root;
     let now = meta.taken_at;
     let item = |path: &Path, node: &Node, why: String, markable: bool| {
@@ -631,9 +638,10 @@ fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Valu
             let path = disktree_core::tree::path_of(root, tree, &c.crumbs);
             let (why, markable) = match &c.finding {
                 Finding::Reclaimable(r) => (reclaim_why(*r), true),
-                Finding::Worktrees { count, oldest_days } => {
-                    (format!("{count} agent worktrees, oldest {oldest_days} d"), false)
-                }
+                Finding::Worktrees { count, oldest_days } => (
+                    format!("{count} agent worktrees, oldest {oldest_days} d"),
+                    false,
+                ),
                 Finding::StaleExperiments { count } => {
                     (format!("{count} experiments untouched 30+ d"), false)
                 }
@@ -655,11 +663,27 @@ fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Valu
         if !node.kind.is_dir() || node.bytes < STALE_BYTES {
             continue;
         }
-        let days = if node.modified > 0 { (now - node.modified) / 86_400 } else { -1 };
+        let days = if node.modified > 0 {
+            (now - node.modified) / 86_400
+        } else {
+            -1
+        };
         if days >= STALE_DAYS && node.reclaim.is_none() {
-            stale.push((node.bytes, item(&path, node, format!("no writes in {}", age_words(days)), true)));
+            stale.push((
+                node.bytes,
+                item(
+                    &path,
+                    node,
+                    format!("no writes in {}", age_words(days)),
+                    true,
+                ),
+            ));
         } else if depth < 8 {
-            stack.extend(node.children.iter().map(|c| (c, path.join(&*c.name), depth + 1)));
+            stack.extend(
+                node.children
+                    .iter()
+                    .map(|c| (c, path.join(&*c.name), depth + 1)),
+            );
         }
     }
     stale.sort_by_key(|(b, _)| std::cmp::Reverse(*b));
@@ -674,7 +698,12 @@ fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Valu
             let node = lookup(tree, root, &path)?;
             let delta = g["delta"].as_i64()?;
             (path != *root).then(|| {
-                item(&path, node, format!("+{} in 7 days", human(delta as u64)), true)
+                item(
+                    &path,
+                    node,
+                    format!("+{} in 7 days", human(delta as u64)),
+                    true,
+                )
             })
         })
         .collect();
@@ -683,12 +712,17 @@ fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Valu
         .and_then(|db| store::came_back(&db, 30))
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|(p, peak, trough, at, now_bytes)| {
-            let path = PathBuf::from(&p);
+        .filter_map(|c| {
+            let (peak, trough, at, now_bytes) =
+                (c.peak, c.trough, c.trough_at, c.now);
+            let path = PathBuf::from(&c.path);
             let node = lookup(tree, root, &path)?;
             let why = format!(
                 "fell from {} to {} {} ago, back to {}",
-                human(peak as u64), human(trough as u64), age_words((now - at) / 86_400), human(now_bytes as u64)
+                human(peak as u64),
+                human(trough as u64),
+                age_words((now - at) / 86_400),
+                human(now_bytes as u64)
             );
             Some(item(&path, node, why, false))
         })
@@ -696,8 +730,10 @@ fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Valu
 
     let section = |id: &str, title: &str, detail: &str, items: Vec<Value>| {
         // A path inside another listed path goes with it: counted once.
-        let paths: Vec<String> =
-            items.iter().filter_map(|i| i["path"].as_str().map(String::from)).collect();
+        let paths: Vec<String> = items
+            .iter()
+            .filter_map(|i| i["path"].as_str().map(String::from))
+            .collect();
         let items: Vec<Value> = items
             .into_iter()
             .filter(|i| {
@@ -729,13 +765,21 @@ fn reclaim_why(reason: disktree_core::classify::Reclaim) -> String {
     match reason {
         Reclaim::Regenerable => "cache: rebuilt on next use".into(),
         Reclaim::BuildOutput => "build output: rebuilt on next build".into(),
-        Reclaim::PackageStore => "package store: re-downloaded when needed".into(),
-        Reclaim::Reinstallable => "dependencies: reinstall from the manifest".into(),
-        Reclaim::SandboxLayers => "container layers: pulled again when needed".into(),
+        Reclaim::PackageStore => {
+            "package store: re-downloaded when needed".into()
+        }
+        Reclaim::Reinstallable => {
+            "dependencies: reinstall from the manifest".into()
+        }
+        Reclaim::SandboxLayers => {
+            "container layers: pulled again when needed".into()
+        }
         Reclaim::SyncHistory => "old versions kept by a sync client".into(),
         Reclaim::Trash => "already in a trash".into(),
         Reclaim::Temporary => "scratch space".into(),
-        Reclaim::Snapshots => "snapshots: check they are not your only copy".into(),
+        Reclaim::Snapshots => {
+            "snapshots: check they are not your only copy".into()
+        }
     }
 }
 
@@ -757,7 +801,11 @@ fn human(bytes: u64) -> String {
         v /= 1000.0;
         unit += 1;
     }
-    if v >= 100.0 || unit == 0 { format!("{v:.0} {}", units[unit]) } else { format!("{v:.1} {}", units[unit]) }
+    if v >= 100.0 || unit == 0 {
+        format!("{v:.0} {}", units[unit])
+    } else {
+        format!("{v:.1} {}", units[unit])
+    }
 }
 
 fn proxy(
@@ -854,8 +902,8 @@ fn loopback_host(request: &Request) -> bool {
     matches!(name, "127.0.0.1" | "localhost" | "[::1]")
 }
 
-/// Every response closes its connection, so an idle keep-alive client (URLSession keeps them)
-/// never pins one of tiny_http's pool threads. A guard, not a measured fix: the 40 s stalls seen
+/// Every response closes its connection, so an idle keep-alive client (`URLSession` keeps them)
+/// never pins one of `tiny_http`'s pool threads. A guard, not a measured fix: the 40 s stalls seen
 /// on 2026-09-24 coincided with load average 166 and full swap, and did not go away with it.
 fn close() -> Header {
     Header::from_bytes("Connection", "close").expect("static header")
@@ -879,4 +927,49 @@ fn reply(status: u16, value: &Value) -> Response<std::io::Cursor<Vec<u8>>> {
         .with_status_code(status)
         .with_header(content_type("application/json"))
         .with_header(close())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state() -> (tempfile::TempDir, Shared) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = Arc::new(Mutex::new(State {
+            dir: temp.path().to_path_buf(),
+            meta: None,
+            tree: None,
+            db_error: None,
+            kick_error: None,
+        }));
+        (temp, state)
+    }
+
+    /// The hard rule, as a test: no route deletes, trashes or plans a removal.
+    #[test]
+    fn no_route_can_remove_anything() {
+        let (_t, state) = state();
+        let query = HashMap::new();
+        for action in [
+            "remove", "plan", "removal", "delete", "trash", "move", "cleanup",
+        ] {
+            for method in
+                [Method::Post, Method::Get, Method::Delete, Method::Put]
+            {
+                let (status, _) = local(&method, action, &query, &state);
+                assert_eq!(status, 404, "{method} {action} answered {status}");
+            }
+        }
+    }
+
+    #[test]
+    fn reads_answer_honestly_before_the_first_snapshot() {
+        let (_t, state) = state();
+        let query = HashMap::new();
+        assert_eq!(local(&Method::Get, "node", &query, &state).0, 409);
+        assert_eq!(local(&Method::Get, "suggest", &query, &state).0, 409);
+        let (code, status) = local(&Method::Get, "status", &query, &state);
+        assert_eq!(code, 200);
+        assert_eq!(status["noSnapshot"], true);
+    }
 }

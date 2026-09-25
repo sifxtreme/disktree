@@ -330,7 +330,7 @@ impl WalkContext {
             }
             // By path, before anything opens the directory: opening it is
             // what raises the dialog.
-            if self.options.exclude.iter().any(|skip| *skip == path) {
+            if self.options.exclude.contains(&path) {
                 let mut unread = Node::directory(name);
                 unread.read_error = true;
                 return Classified::Entry(unread);
@@ -663,17 +663,17 @@ fn mark_duplicate_hardlinks(node: &mut Node, seen: &mut FxHashSet<(u64, u64)>) {
 /// the file), and `inode` on a directory is used only as that "holds links" flag until
 /// `finish_tree` clears it.
 fn fold_small_dir(node: &mut Node, floor: u64, is_root: bool) {
-    let (mut bytes, mut files, mut modified, mut links) = (0_u64, 0_u64, 0_i64, false);
+    let (mut bytes, mut files, mut modified, mut links) =
+        (0_u64, 0_u64, 0_i64, false);
     for child in &node.children {
         if child.kind.is_dir() {
             bytes += child.bytes;
             files += child.files;
-            links |= child.inode.is_some();
         } else {
             bytes += child.own_bytes;
             files += child.own_files;
-            links |= child.inode.is_some();
         }
+        links |= child.inode.is_some();
         modified = modified.max(child.modified);
     }
     node.bytes = bytes;
@@ -688,7 +688,11 @@ fn fold_small_dir(node: &mut Node, floor: u64, is_root: bool) {
     folded.own_files = files;
     folded.files = files;
     folded.modified = modified;
-    node.children = if files > 0 || bytes > 0 { vec![folded] } else { Vec::new() };
+    node.children = if files > 0 || bytes > 0 {
+        vec![folded]
+    } else {
+        Vec::new()
+    };
 }
 
 fn fold_small(leaves: &mut Vec<Node>, floor: u64) {
@@ -837,6 +841,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+fn trace_enabled() -> bool {
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var_os("DISK_TRACE").is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,13 +856,17 @@ mod tests {
         let dir = temp.path().join("d");
         fs::create_dir(&dir).expect("mkdir");
         for i in 0..20 {
-            fs::write(dir.join(format!("s{i}")), vec![1_u8; 5000]).expect("small");
+            fs::write(dir.join(format!("s{i}")), vec![1_u8; 5000])
+                .expect("small");
         }
         fs::write(dir.join("big"), vec![1_u8; 3 << 20]).expect("big");
         let plain = scan(temp.path(), ScanOptions::default()).expect("scan");
         let folded = scan(
             temp.path(),
-            ScanOptions { fold_below: Some(1 << 20), ..ScanOptions::default() },
+            ScanOptions {
+                fold_below: Some(1 << 20),
+                ..ScanOptions::default()
+            },
         )
         .expect("scan");
         assert_eq!(plain.bytes, folded.bytes);
@@ -869,13 +882,21 @@ mod tests {
         for d in ["a/b/c", "a/b/d", "e"] {
             fs::create_dir_all(temp.path().join(d)).expect("mkdir");
         }
-        for (f, n) in [("a/b/c/x", 4000), ("a/b/d/y", 9000), ("a/z", 100), ("e/big", 3 << 20)] {
+        for (f, n) in [
+            ("a/b/c/x", 4000),
+            ("a/b/d/y", 9000),
+            ("a/z", 100),
+            ("e/big", 3 << 20),
+        ] {
             fs::write(temp.path().join(f), vec![1_u8; n]).expect("file");
         }
         let plain = scan(temp.path(), ScanOptions::default()).expect("scan");
         let folded = scan(
             temp.path(),
-            ScanOptions { fold_below: Some(1 << 20), ..ScanOptions::default() },
+            ScanOptions {
+                fold_below: Some(1 << 20),
+                ..ScanOptions::default()
+            },
         )
         .expect("scan");
         assert_eq!(plain.bytes, folded.bytes);
@@ -883,7 +904,14 @@ mod tests {
         let a = folded.child_named("a").expect("a");
         assert_eq!(a.children.len(), 1, "the small subtree is one leaf");
         assert_eq!(a.children[0].files, 3);
-        assert!(folded.child_named("e").expect("e").child_named("big").is_some(), "large stays");
+        assert!(
+            folded
+                .child_named("e")
+                .expect("e")
+                .child_named("big")
+                .is_some(),
+            "large stays"
+        );
     }
 
     #[test]
@@ -892,15 +920,27 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let crate_dir = temp.path().join("app");
         fs::create_dir_all(crate_dir.join("target")).expect("mkdir");
-        fs::write(crate_dir.join("Cargo.toml"), b"[package]").expect("manifest");
-        fs::write(crate_dir.join("target/out"), vec![1_u8; 2 << 20]).expect("out");
+        fs::write(crate_dir.join("Cargo.toml"), b"[package]")
+            .expect("manifest");
+        fs::write(crate_dir.join("target/out"), vec![1_u8; 2 << 20])
+            .expect("out");
         let tree = scan(
             temp.path(),
-            ScanOptions { fold_below: Some(1 << 20), ..ScanOptions::default() },
+            ScanOptions {
+                fold_below: Some(1 << 20),
+                ..ScanOptions::default()
+            },
         )
         .expect("scan");
-        let target = tree.child_named("app").and_then(|a| a.child_named("target")).expect("target");
-        assert_eq!(target.reclaim, Some(Reclaim::BuildOutput), "Cargo.toml was folded away");
+        let target = tree
+            .child_named("app")
+            .and_then(|a| a.child_named("target"))
+            .expect("target");
+        assert_eq!(
+            target.reclaim,
+            Some(Reclaim::BuildOutput),
+            "Cargo.toml was folded away"
+        );
     }
     use crate::tree::Metric;
     use std::fs;
@@ -1255,9 +1295,4 @@ mod tests {
             );
         }
     }
-}
-
-fn trace_enabled() -> bool {
-    static TRACE: OnceLock<bool> = OnceLock::new();
-    *TRACE.get_or_init(|| std::env::var_os("DISK_TRACE").is_some())
 }
