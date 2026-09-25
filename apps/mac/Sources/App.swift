@@ -11,6 +11,9 @@ struct GuiltySparkApp: App {
 
     init() {
         SparkModel.shared.start()
+        if Harness.enabled {
+            Task { @MainActor in await HarnessRunner().run() }
+        }
     }
 
     var body: some Scene {
@@ -18,7 +21,7 @@ struct GuiltySparkApp: App {
             MainWindow()
                 .environmentObject(model)
                 .tint(Theme.accent)
-                .frame(minWidth: 900, minHeight: 580)
+                .frame(minWidth: 1180, minHeight: 710)
         }
         .defaultSize(width: 1380, height: 880)
         .commands {
@@ -41,7 +44,7 @@ struct GuiltySparkApp: App {
             }
         }
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: .constant(!Harness.enabled)) {
             MenuPanel().environmentObject(model)
         } label: {
             MenuLabel().environmentObject(model)

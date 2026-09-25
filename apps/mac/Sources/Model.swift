@@ -52,8 +52,8 @@ final class SparkModel: ObservableObject {
     static let shared = SparkModel()
 
     @Published var hosts: [HostDTO] = []
-    @Published var host = UserDefaults.standard.string(forKey: "host") ?? "local" {
-        didSet { UserDefaults.standard.set(host, forKey: "host") }
+    @Published var host = Harness.enabled ? "local" : UserDefaults.standard.string(forKey: "host") ?? "local" {
+        didSet { if !Harness.enabled { UserDefaults.standard.set(host, forKey: "host") } }
     }
     @Published var states: [String: HostState] = [:]
     @Published var mode: ColorMode = .kind
@@ -91,8 +91,8 @@ final class SparkModel: ObservableObject {
                 lastOthers = Date()
                 for h in hosts where h.id != host { await refresh(h.id) }
             }
-            // Quickly while a snapshot runs (the count moves), slowly otherwise (hourly data).
-            let busy = current.status?.scanning == true
+            // Quickly while a snapshot runs or the server is down (so it recovers within seconds).
+            let busy = current.status?.scanning == true || !serverUp || hosts.isEmpty
             try? await Task.sleep(for: .seconds(busy ? 1.5 : 10))
         }
     }
@@ -107,34 +107,44 @@ final class SparkModel: ObservableObject {
                 states[h.id] = HostState(marks: loadMarks(h.id))
             }
         } catch {
+            if Harness.enabled { print("LOG loadHosts failed: \(error)"); fflush(stdout) }
+            // Only a refused or missing connection means down; a timeout is a busy machine.
+            if let e = error as? URLError, e.code == .timedOut { return }
             serverUp = false
         }
     }
 
     func refresh(_ id: String) async {
         if hosts.isEmpty { await loadHosts() }
-        var s = states[id] ?? HostState(marks: loadMarks(id))
+        if states[id] == nil { states[id] = HostState(marks: loadMarks(id)) }
+        // Fetch first, then change only the fields this owns. Copying the whole state before the
+        // await and writing it back after lost anything done meanwhile (Forward, marks, the node).
+        var status: StatusDTO?
+        var failure: String?
         do {
-            let status: StatusDTO = try await API.get("api/h/\(id)/status")
-            s.status = status
-            s.error = nil
+            status = try await API.get("api/h/\(id)/status")
             serverUp = true
         } catch let error as APIError {
-            s.error = error.message
+            failure = error.message
+        } catch let error as URLError where error.code == .timedOut {
+            // Slow is not down: keep the last numbers rather than claim the server is gone.
+            if Harness.enabled { print("LOG refresh \(id) timed out"); fflush(stdout) }
+            if states[id]?.status == nil { failure = "slow to answer" } else { return }
         } catch {
-            s.error = error.localizedDescription
+            if Harness.enabled { print("LOG refresh \(id) failed: \(error)"); fflush(stdout) }
+            failure = error.localizedDescription
             if id == "local" { serverUp = false }
         }
-        let fresh = (s.status?.scannedAt ?? 0) != 0 && s.status?.scannedAt != s.seenSnapshot
-        states[id] = s
-        if fresh {
-            states[id]?.seenSnapshot = s.status?.scannedAt ?? 0
-            if id == host {
-                await load(path: s.node?.path, select: s.selection)
-                await loadExtras()
-            } else {
-                states[id]?.node = nil
-            }
+        if let status { states[id]?.status = status }
+        states[id]?.error = failure
+        let at = states[id]?.status?.scannedAt ?? 0
+        guard at != 0, at != states[id]?.seenSnapshot else { return }
+        states[id]?.seenSnapshot = at
+        if id == host {
+            await load(path: states[id]?.node?.path, select: states[id]?.selection)
+            await loadExtras()
+        } else {
+            states[id]?.node = nil
         }
     }
 
@@ -286,11 +296,13 @@ final class SparkModel: ObservableObject {
     }
 
     private func loadMarks(_ id: String) -> [String: Mark] {
+        if Harness.enabled { return [:] } // never the user's marks
         guard let data = UserDefaults.standard.data(forKey: "marks.\(id)") else { return [:] }
         return (try? JSONDecoder().decode([String: Mark].self, from: data)) ?? [:]
     }
 
     private func saveMarks(_ id: String) {
+        if Harness.enabled { return }
         let data = try? JSONEncoder().encode(states[id]?.marks ?? [:])
         UserDefaults.standard.set(data, forKey: "marks.\(id)")
     }
@@ -323,6 +335,7 @@ final class SparkModel: ObservableObject {
     }
 
     func commit() {
+        guard !Harness.enabled else { return show("The harness never removes anything") }
         guard let r = review else { return }
         var body: [String: Any] = ["paths": markPaths(r.host), "mode": r.mode]
         if r.mode == "permanent" { body["confirm"] = "delete" }

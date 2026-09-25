@@ -80,12 +80,29 @@ func layoutTiles(_ root: NodeDTO, in rect: CGRect) -> [Tile] {
     return tiles
 }
 
+/// Layout keyed on what it depends on, computed during body. Laying out from onAppear/onChange missed
+/// the case where the map appears before its size is known (returning from Clean up drew nothing).
+final class LayoutCache {
+    private var key: String = ""
+    private(set) var tiles: [Tile] = []
+    private(set) var previous: [Tile] = []
+
+    func update(_ node: NodeDTO, _ size: CGSize) {
+        let key = "\(node.path ?? "")|\(node.bytes)|\(Int(size.width))x\(Int(size.height))"
+        guard key != self.key, size.width > 0, size.height > 0 else { return }
+        previous = tiles
+        tiles = layoutTiles(node, in: CGRect(origin: .zero, size: size))
+        self.key = key
+    }
+}
+
 struct TreemapView: View {
     @EnvironmentObject var model: SparkModel
     let node: NodeDTO
 
-    @State private var tiles: [Tile] = []
+    @State private var cache = LayoutCache()
     @State private var size: CGSize = .zero
+    private var tiles: [Tile] { cache.tiles }
     @State private var hover: (path: String, at: CGPoint)?
     /// The zoom transform: content point p is drawn at p * scale + offset.
     @State private var scale = CGSize(width: 1, height: 1)
@@ -95,6 +112,7 @@ struct TreemapView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let _ = cache.update(node, geo.size)
             ZStack(alignment: .topLeading) {
                 Canvas { ctx, _ in draw(&ctx) }
                     .scaleEffect(x: scale.width, y: scale.height, anchor: .topLeading)
@@ -109,8 +127,8 @@ struct TreemapView: View {
                 }
             }
             .contentShape(Rectangle())
-            .onAppear { size = geo.size; tiles = layoutTiles(node, in: frame) }
-            .onChange(of: geo.size) { _, s in size = s; tiles = layoutTiles(node, in: frame) }
+            .onAppear { size = geo.size }
+            .onChange(of: geo.size) { _, s in size = s }
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let p): hover = hit(p).map { ($0.path, p) }
@@ -141,15 +159,14 @@ struct TreemapView: View {
         .onChange(of: node) { old, new in transition(from: old, to: new) }
     }
 
-    private var frame: CGRect { CGRect(origin: .zero, size: size) }
-
     // MARK: zoom
 
     /// Going in: the new folder grows out of the tile it was. Going out: the parent starts zoomed on
     /// the folder we left and settles back. Anything else (another machine, a new snapshot) fades.
     private func transition(from old: NodeDTO, to new: NodeDTO) {
-        let oldTiles = tiles
-        tiles = layoutTiles(new, in: frame)
+        // Body has already laid out the new node; the cache kept the old tiles.
+        cache.update(new, size)
+        let oldTiles = cache.previous
         hover = nil
         guard let from = old.path, let to = new.path, from != to, size.width > 0 else {
             settle(fadeFrom: 0.4)

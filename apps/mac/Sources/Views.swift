@@ -13,7 +13,7 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 224, max: 280)
         } detail: {
             Detail()
-                .inspector(isPresented: Binding(get: { showInspector && model.page == .map }, set: { showInspector = $0 })) {
+                .inspector(isPresented: Binding(get: { showInspector && model.page == .map }, set: { if model.page == .map { showInspector = $0 } })) {
                     Inspector()
                         .inspectorColumnWidth(min: 280, ideal: 330, max: 440)
                 }
@@ -314,6 +314,8 @@ struct Legend: View {
     @EnvironmentObject var model: SparkModel
 
     var body: some View {
+        // One line that scrolls when narrow: wrapping split words ("Tool-chains").
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 12) {
             if model.mode == .age {
                 ForEach([("this week", 0.72), ("this month", 0.52), ("6 months", 0.34), ("a year", 0.20), ("older", 0.09)], id: \.0) { label, mix in
@@ -329,6 +331,8 @@ struct Legend: View {
         }
         .font(Theme.caption)
         .foregroundStyle(Theme.muted)
+        .fixedSize()
+        }
     }
 
     private func swatch(_ color: Color, _ label: String, hatched: Bool = false) -> some View {
@@ -346,7 +350,7 @@ struct Legend: View {
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                 }
-            Text(label)
+            Text(label).lineLimit(1)
         }
     }
 }

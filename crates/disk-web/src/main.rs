@@ -983,6 +983,7 @@ fn proxy(
             Response::from_data(text.into_bytes())
                 .with_status_code(status)
                 .with_header(content_type("application/json"))
+                .with_header(close())
         }
         Err(error) => reply(
             502,
@@ -1040,6 +1041,13 @@ fn loopback_host(request: &Request) -> bool {
     matches!(name, "127.0.0.1" | "localhost" | "[::1]")
 }
 
+/// Every response closes its connection, so an idle keep-alive client (URLSession keeps them)
+/// never pins one of tiny_http's pool threads. A guard, not a measured fix: the 40 s stalls seen
+/// on 2026-09-24 coincided with load average 166 and full swap, and did not go away with it.
+fn close() -> Header {
+    Header::from_bytes("Connection", "close").expect("static header")
+}
+
 fn content_type(value: &str) -> Header {
     Header::from_bytes("Content-Type", value).expect("static header")
 }
@@ -1047,6 +1055,7 @@ fn content_type(value: &str) -> Header {
 fn asset(body: &str, kind: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     Response::from_data(body.as_bytes().to_vec())
         .with_header(content_type(kind))
+        .with_header(close())
         .with_header(
             Header::from_bytes("Cache-Control", "no-cache").expect("static"),
         )
@@ -1056,4 +1065,5 @@ fn reply(status: u16, value: &Value) -> Response<std::io::Cursor<Vec<u8>>> {
     Response::from_data(value.to_string().into_bytes())
         .with_status_code(status)
         .with_header(content_type("application/json"))
+        .with_header(close())
 }
