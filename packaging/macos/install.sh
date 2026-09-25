@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Guilty Spark's two launchd agents (work name: disk) on this Mac.
+# Install Guilty Spark's three launchd agents (work name: disk) on this Mac.
 #
 #   install.sh local  [ID=URL,LABEL,TOKEN_FILE]...   # UI on 127.0.0.1:7321
 #   install.sh remote BIND_ADDR                      # UI beyond loopback, token required
@@ -7,6 +7,8 @@
 # com.asif.disk-snap  hourly snapshot into ~/Library/Application Support/disk/disk.db.
 #                         The only process that needs Full Disk Access; no network, no delete.
 # com.asif.disk-web   the UI and API. Reads the DB; never scans; holds no grant.
+# com.asif.disk-mem   every 5 min: memory by owner into mem.db. On `local` it also
+#                         notifies on a pressure change (it replaces mem-guard).
 #
 # DISK_LABEL names this machine in the sidebar (default: hostname -s).
 # Binaries are expected signed (packaging/macos/sign.sh): an FDA grant is keyed
@@ -22,7 +24,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 uid=$(id -u)
 
 mkdir -p "$bindir" "$state" "$HOME/Library/Logs"
-for bin in disk-web disk-snap; do
+for bin in disk-web disk-snap disk-mem; do
   if [ -f "$here/$bin" ]; then src="$here/$bin"; else src="$here/../../target/release/$bin"; fi
   install -m 0755 "$src" "$bindir/$bin"
 done
@@ -58,8 +60,10 @@ web="<string>$bindir/disk-web</string>"
 if [ -n "${DISK_LABEL:-}" ]; then
   web="$web<string>--label</string><string>$DISK_LABEL</string>"
 fi
+memory="<string>$bindir/disk-mem</string>"
 case "$kind" in
   local)
+    memory="$memory<string>--notify</string>"
     web="$web<string>--bind</string><string>127.0.0.1:7321</string>"
     for peer in "$@"; do
       web="$web<string>--peer</string><string>$peer</string>"
@@ -82,7 +86,10 @@ agent com.asif.disk-snap "<string>$bindir/disk-snap</string>" \
 # A Tailscale bind fails until tailscaled is up; KeepAlive retries.
 agent com.asif.disk-web "$web" \
   "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>"
+# mem-guard's job, and more: sample every 5 min; alert on a change of state (local only).
+agent com.asif.disk-mem "$memory" \
+  "<key>StartInterval</key><integer>300</integer><key>RunAtLoad</key><true/>"
 
 "$bindir/disk-snap" --probe | sed 's/^/snapper (from this shell) /'
-echo "installed com.asif.disk-snap + com.asif.disk-web ($kind)"
+echo "installed com.asif.disk-snap + com.asif.disk-web + com.asif.disk-mem ($kind)"
 echo "grant Full Disk Access to: $bindir/disk-snap"

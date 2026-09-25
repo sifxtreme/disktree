@@ -7,7 +7,7 @@ set -eu
 identity=${DISK_SIGN_ID:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)}
 [ -n "$identity" ] || { echo "no Apple Development identity; set DISK_SIGN_ID" >&2; exit 1; }
 cd "$(dirname "$0")/../../target/release"
-for bin in disk-snap disk-web; do
+for bin in disk-snap disk-web disk-mem; do
   codesign -f -s "$identity" -i "com.sevensevensix.$bin" -o runtime "$bin"
   codesign -v "$bin"
 done

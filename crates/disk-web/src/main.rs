@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, thread};
 
+mod mem;
 mod store;
 
 use disktree_core::insights::{Finding, worth_a_look};
@@ -407,6 +408,27 @@ fn local(
             let scanned_at = guard.meta.as_ref().map_or(0, |m| m.taken_at);
             drop(guard);
             (200, insights(&tree, &root, scanned_at))
+        }
+        // Memory, sampled by disk-mem into mem.db beside disk.db.
+        (Method::Get, "mem" | "mem-owner" | "mem-history") => {
+            let path = mem::db_path(&guard.dir);
+            drop(guard);
+            let days: i64 =
+                query.get("days").and_then(|d| d.parse().ok()).unwrap_or(7);
+            let since = now() - days * 86_400;
+            let result = mem::open_read(&path).and_then(|db| match action {
+                "mem" => mem::top(&db),
+                "mem-history" => mem::system_series(&db, since),
+                _ => mem::owner_series(
+                    &db,
+                    query.get("name").map_or("", String::as_str),
+                    since,
+                ),
+            });
+            match result {
+                Ok(value) => (200, value),
+                Err(error) => (503, json!({"error": error.to_string()})),
+            }
         }
         _ => (404, json!({"error": "not found"})),
     }

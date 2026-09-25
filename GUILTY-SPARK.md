@@ -73,6 +73,10 @@ Every claim here has a command. A claim whose check has not been run reads UNVER
 | Browser page works on desktop and phone, read-only | `PLAYWRIGHT=… node crates/disk-web/web-check.mjs` | 13/13 pass (2026-09-24) |
 | Growing fast and Came back are useful on real data | the week check: `curl -s 127.0.0.1:7321/api/h/local/suggest` after 7 days of snapshots | UNVERIFIED (needs history until 2026-10-01) |
 | Strict lints | `cargo clippy -p disk-web -p disktree-core --all-targets -- -D warnings` | 0 findings (2026-09-24). The upstream GPUI app was not built here (Linux only). |
+| Memory owners are attributed right; imports are idempotent; thinning keeps one sample an hour | `cargo test -p disk-web mem::` | pass 2026-09-25, 8 tests |
+| Memory is sampled on both machines | `disk-mem top` on each; `curl -s 127.0.0.1:7321/api/h/forge/mem` | 2026-09-25: laptop 100 owners (Claude Code 6.5 GB, Ollama 4.5 GB, Chrome 3.9 GB); Forge 71 owners, `pm2:forge-bot` 182 MB |
+| mem-guard's history is in mem.db | `sqlite3 …/mem.db "select source,count(*) from mem_samples group by 1"` | 5,742 of 5,742 log lines imported; a re-import adds 0 (2026-09-25) |
+| Alerts fire only on a change of severity | `disk-mem --dir <tmp> --notify` twice with `mem-state` = normal while the severity is warning | 2026-09-25: the first run moved the state to warning, and the second left it alone. The notification banner itself: UNVERIFIED (not seen) |
 
 ## Where the data is
 
@@ -86,6 +90,38 @@ Syncthing file lose writes).
 ```
 sqlite3 ~/Library/Application\ Support/disk/disk.db \
   "select datetime(taken_at,'unixepoch','localtime'), vol_available/1e9 from snapshots order by id desc limit 24"
+```
+
+## Memory (disk-mem, which replaced mem-guard)
+
+`com.asif.disk-mem` runs `~/.local/bin/disk-mem` every 5 minutes on both machines and writes
+`~/Library/Application Support/disk/mem.db`, which is not synced. It answers "what is eating memory,
+and since when?" the way the snapshots do for disk.
+
+- **Per process: `phys_footprint`**, which is `top`'s MEM and what Activity Monitor shows. It is never
+  `ps` RSS: RSS leaves out compressed memory and undercounted Node services 5–10x. `top`'s CMPRS is
+  kept beside it. A large footprint that is mostly compressed belongs to a process the machine is paging.
+- **Per owner.** A process belongs to the first match walking up its parents:
+  1. a Claude Code session (`claude`);
+  2. a pm2 app (`pm2:<name>`, on Forge);
+  3. a launchd job (its label; an app's job is named by its `.app`);
+  4. a direct child of launchd.
+  Owners under 16 MB are summed into `(other)`, so the total still adds up.
+- **Ollama models** are recorded from `127.0.0.1:11434/api/ps` each sample. They are Metal-wired and
+  cannot be paged out.
+- **System:** pressure level, severity, swap used/total, free %, compressor, wired and load, every sample.
+- **Alerts (laptop only, `--notify`):** mem-guard's rule, unchanged. There is one notification per
+  change of severity: kernel pressure 2 → warning, 4 → critical, and swap ≥ 3072 MB escalates normal to
+  warning. The state is in `mem-state`. mem-guard's plist was moved to
+  `~/.local/share/mem-guard/retired/`, and its log (from 2026-09-05) is imported as `source = 'mem-guard-log'`.
+- Tables: `mem_samples` (kept forever), `mem_owners` and `mem_models` (every sample for 14 days, then
+  one sample an hour).
+
+```
+disk-mem top                              # top memory owners now
+disk-mem owner com.asif.hister --days 7   # one owner over time (a partial name works if it is unique)
+curl -s 127.0.0.1:7321/api/h/local/mem    # same, as JSON; also /mem-owner?name=&days= and /mem-history?days=
+curl -s 127.0.0.1:7321/api/h/forge/mem    # Forge, through the peer proxy
 ```
 
 ## Why a separate snapper (the tcc-snapshot pattern)
@@ -118,7 +154,7 @@ then look at `~/Library/Logs/com.asif.disk-snap.log`. A run with the grant does 
 cargo build --release -p disk-web && sh packaging/macos/sign.sh
 DISK_LABEL="This Mac" sh packaging/macos/install.sh local \
   "forge=http://<forge-tailscale-ip>:7321,Forge,$HOME/Library/Application Support/disk/forge.token"
-scp target/release/disk-{web,snap} packaging/macos/install.sh mac-server:/tmp/disk-install/
+scp target/release/disk-{web,snap,mem} packaging/macos/install.sh mac-server:/tmp/disk-install/
 ssh mac-server 'DISK_LABEL=Forge sh /tmp/disk-install/install.sh remote <forge-tailscale-ip>:7321'
 ```
 
