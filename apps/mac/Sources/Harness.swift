@@ -146,7 +146,9 @@ final class HarnessRunner {
             check("window honours the minimum size", w.frame.width >= 1180 && w.frame.height >= 710,
                   "\(Int(w.frame.width))x\(Int(w.frame.height))")
         }
-        for h in [760, 820, 880] {
+        // 700 is below the minimum on purpose: a request smaller than the window allows must be
+        // clamped, not crash (it used to, 2026-09-24).
+        for h in [700, 760, 820, 880] {
             window?.setFrame(NSRect(x: 80, y: 80, width: 1180, height: CGFloat(h)), display: true)
             await sleep(1.5)
             await shot("12-height-\(h)")

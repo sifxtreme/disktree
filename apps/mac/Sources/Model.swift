@@ -24,6 +24,9 @@ struct HostState {
     var selection: String?
     var seenSnapshot: Int64 = 0
     var suggest: SuggestDTO?
+    /// Insights, history, growth and suggestions arrived for the shown snapshot. Until then the
+    /// cards say "Loading", never "nothing stands out": empty is not the same as not yet known.
+    var extrasLoaded = false
     /// Folders visited, for Back and Forward (⌘[ ⌘]).
     var back: [String] = []
     var forward: [String] = []
@@ -45,6 +48,7 @@ final class SparkModel: ObservableObject {
     @Published var toast: String?
 
     private var started = false
+    private var startPath = UserDefaults.standard.string(forKey: "openPath")
     private var lastOthers = Date.distantPast
 
     var current: HostState { states[host] ?? HostState() }
@@ -62,10 +66,7 @@ final class SparkModel: ObservableObject {
 
     private func loop() async {
         await loadHosts()
-        if let start = UserDefaults.standard.string(forKey: "openPath") {
-            await refresh(host)
-            open(start)
-        }
+
         while true {
             await refresh(host)
             if Date().timeIntervalSince(lastOthers) > 30 {
@@ -122,7 +123,11 @@ final class SparkModel: ObservableObject {
         guard at != 0, at != states[id]?.seenSnapshot else { return }
         states[id]?.seenSnapshot = at
         if id == host {
-            await load(path: states[id]?.node?.path, select: states[id]?.selection)
+            // `-openPath` applies to the first load, not after it: opening it separately raced the
+            // first snapshot load, which reset the view to the root.
+            let start = startPath
+            startPath = nil
+            await load(path: states[id]?.node?.path ?? start, select: states[id]?.selection)
             await loadExtras()
         } else {
             states[id]?.node = nil
@@ -136,6 +141,7 @@ final class SparkModel: ObservableObject {
         if var old = states[host] {
             old.node = nil; old.index = [:]; old.insights = []; old.history = []; old.growth = nil; old.suggest = nil
             old.seenSnapshot = 0
+            old.extrasLoaded = false
             states[host] = old
         }
         host = id
@@ -182,6 +188,7 @@ final class SparkModel: ObservableObject {
         states[id]?.history = h?.points ?? []
         states[id]?.growth = g
         states[id]?.suggest = c
+        states[id]?.extrasLoaded = true
     }
 
     static func index(_ root: NodeDTO) -> [String: NodeDTO] {

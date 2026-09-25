@@ -10,6 +10,12 @@ struct GuiltySparkApp: App {
     @StateObject private var model = SparkModel.shared
 
     init() {
+        // `-appearance dark|light` for screenshots; otherwise the system setting.
+        switch UserDefaults.standard.string(forKey: "appearance") {
+        case "dark": NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApplication.shared.appearance = NSAppearance(named: .aqua)
+        default: break
+        }
         SparkModel.shared.start()
         if Harness.enabled {
             Task { @MainActor in await HarnessRunner().run() }
@@ -24,6 +30,10 @@ struct GuiltySparkApp: App {
                 .frame(minWidth: 1180, minHeight: 710)
         }
         .defaultSize(width: 1380, height: 880)
+        // The window enforces the content minimum, so a frame request below it (a screen change, a
+        // window manager, a restored size) is clamped. Without this, SwiftUI re-entered layout until
+        // AppKit aborted (crash reports 2026-09-24 17:23, 17:24, 19:29; the harness reproduces it).
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .toolbar) {
                 Button("Snapshot Now") { model.snapshotNow() }

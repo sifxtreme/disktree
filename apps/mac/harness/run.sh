@@ -9,7 +9,7 @@ out=${1:-${TMPDIR:-/tmp}/disk-harness-$(date +%Y%m%d-%H%M%S)}
 app=${DISK_APP:-"$HOME/Applications/Guilty Spark.app/Contents/MacOS/GuiltySpark"}
 mkdir -p "$out"
 : > "$out/out.log"
-"$app" -harness YES -harnessOut "$out" > "$out/out.log" 2> "$out/stderr.log" &
+"$app" -harness YES -harnessOut "$out" ${DISK_HARNESS_ARGS:-} > "$out/out.log" 2> "$out/stderr.log" &
 pid=$!
 seen=0
 while kill -0 "$pid" 2>/dev/null; do

@@ -23,6 +23,12 @@
 >   leaf, keeping the files classification reads. That cut the snapper's peak memory
 >   from 923 MB to 146 MB on a 2.9M-file home, with exact totals.
 >
+> ![Guilty Spark: a home directory as a treemap, with free space, the inspector and 7 days of history](assets/guilty-spark/map.png)
+>
+> | Clean up: what to delete, and why | Clicked into a folder | Dark |
+> |---|---|---|
+> | ![Clean up](assets/guilty-spark/cleanup.png) | ![Zoomed](assets/guilty-spark/zoom.png) | ![Dark](assets/guilty-spark/dark.png) |
+>
 > Install, how it works, and the safety model: **[GUILTY-SPARK.md](GUILTY-SPARK.md)**.
 >
 > ```sh

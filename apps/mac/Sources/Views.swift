@@ -11,11 +11,16 @@ struct MainWindow: View {
             Sidebar()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 224, max: 280)
         } detail: {
-            Detail()
-                .inspector(isPresented: Binding(get: { showInspector && model.page == .map }, set: { if model.page == .map { showInspector = $0 } })) {
-                    Inspector()
-                        .inspectorColumnWidth(min: 280, ideal: 330, max: 440)
+            // A plain panel, not `.inspector`: resizing the window with the system inspector crashed
+            // the app intermittently (SwiftUI SplitViewChildController min-size loop, AppKit abort;
+            // reproduced by the harness with every card removed, so the column itself was the cause).
+            HStack(spacing: 0) {
+                Detail()
+                if showInspector && model.page == .map {
+                    Divider()
+                    Inspector().frame(width: 330)
                 }
+            }
         }
         .navigationTitle(model.hostLabel)
         .navigationSubtitle(subtitle)
@@ -178,6 +183,9 @@ struct Detail: View {
             }
         }
         .background(Theme.bg)
+        // No fixed minimum here: one (560 pt) made the split view's column minimums conflict at the
+        // smallest window and AppKit aborted ("didUpdateMinSize"; the harness reproduced it). The rows
+        // above truncate instead, so this column's minimum never follows its text.
     }
 }
 
@@ -215,8 +223,10 @@ struct Trail: View {
             } else {
                 Text(model.hostLabel).font(Theme.title)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 }
 
@@ -232,10 +242,12 @@ struct Verdict: View {
                 let safe = s.suggest?.sections.first { $0.id == "safe" }?.bytes ?? 0
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(bytes(space.available)).font(.system(size: 30, weight: .bold)).monospacedDigit()
+                        .fixedSize()
                     Text("free of \(bytes(space.total))").font(Theme.callout).foregroundStyle(Theme.muted)
+                        .lineLimit(1)
                     if safe > 0 {
                         Button { model.page = .cleanup } label: {
-                            Text("\(bytes(safe)) safe to clear →").font(Theme.callout.weight(.medium))
+                            Text("\(bytes(safe)) safe to clear →").font(Theme.callout.weight(.medium)).lineLimit(1)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(Theme.accent)
@@ -395,7 +407,8 @@ struct SelectionCard: View {
         Card(title: n == nil ? "Selection" : isRoot ? "This folder" : n!.dir ? "Folder" : "File") {
             if let n, let path {
                 Text(n.name).font(Theme.headline).textSelection(.enabled)
-                Text(path).font(Theme.codeCaption).foregroundStyle(Theme.muted).textSelection(.enabled)
+                Text(displayPath(path, root: s.status?.root)).font(Theme.codeCaption).foregroundStyle(Theme.muted)
+                    .help(path)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(bytes(n.bytes)).font(.system(size: 28, weight: .bold)).monospacedDigit()
                     Text("\(pct(n.bytes, s.status?.tree?.bytes ?? 0)) of snapshot").font(Theme.subhead).foregroundStyle(Theme.muted)
@@ -466,7 +479,9 @@ struct HistoryCard: View {
         let s = model.current
         let points = s.history.filter { $0.available != nil }
         Card(title: "Free space · 7 days") {
-            if points.count < 2 {
+            if !s.extrasLoaded {
+                Text(s.status?.tree == nil ? "—" : "Loading…").font(Theme.caption).foregroundStyle(Theme.muted)
+            } else if points.count < 2 {
                 Text(points.isEmpty ? "—" : "One snapshot so far. The trend starts with the next, within the hour.")
                     .font(Theme.caption).foregroundStyle(Theme.muted)
             } else {
@@ -506,8 +521,10 @@ struct LookCard: View {
     var body: some View {
         let s = model.current
         Card(title: "Worth a look") {
-            if s.insights.isEmpty {
-                Text(s.status?.tree == nil ? "—" : "Nothing over 64 MB stands out.").font(Theme.caption).foregroundStyle(Theme.muted)
+            if !s.extrasLoaded {
+                Text(s.status?.tree == nil ? "—" : "Loading…").font(Theme.caption).foregroundStyle(Theme.muted)
+            } else if s.insights.isEmpty {
+                Text("Nothing over 64 MB stands out.").font(Theme.caption).foregroundStyle(Theme.muted)
             } else {
                 ForEach(all ? s.insights : Array(s.insights.prefix(5))) { item in
                     ListRow(title: item.name ?? baseName(item.path), detail: item.why, value: bytes(item.bytes)) {
@@ -664,4 +681,11 @@ struct Sparkline: View {
             }
         }
     }
+}
+
+/// A path as a person reads it: `~/…` under the snapshot root. The full path stays in the tooltip
+/// and in Copy Path.
+func displayPath(_ path: String, root: String?) -> String {
+    guard let root, path == root || path.hasPrefix(root + "/") else { return path }
+    return "~" + path.dropFirst(root.count)
 }

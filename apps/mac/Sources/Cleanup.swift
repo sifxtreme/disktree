@@ -40,7 +40,9 @@ struct CleanupView: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text("Clean up \(model.hostLabel)").font(Theme.display)
             Group {
-                if safe + stale == 0 {
+                if s.suggest == nil {
+                    Text(s.status?.tree == nil ? "Clean up needs a snapshot first." : "Loading suggestions…")
+                } else if safe + stale == 0 {
                     Text("Nothing large stands out.")
                 } else {
                     Text("\(bytes(safe)) regenerates on its own if deleted. ")
@@ -145,7 +147,7 @@ struct SuggestRow: View {
 
     var body: some View {
         let root = model.current.status?.root ?? ""
-        let shown = item.path.hasPrefix(root + "/") ? "~/" + item.path.dropFirst(root.count + 1) : item.path
+        let shown = displayPath(item.path, root: root)
         HStack(spacing: 12) {
             Circle().fill(Theme.category(item.category)).frame(width: 9, height: 9)
             VStack(alignment: .leading, spacing: 2) {

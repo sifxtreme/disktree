@@ -136,7 +136,9 @@ struct APIError: LocalizedError {
 }
 
 enum API {
-    static let base = URL(string: "http://127.0.0.1:7321/")!
+    /// `-server <url>` points the app at another disk-web (the README's demo screenshots use a demo
+    /// home served on a spare port); the default is this Mac's.
+    static let base = URL(string: UserDefaults.standard.string(forKey: "server") ?? "http://127.0.0.1:7321/")!
 
     // A path in a query must survive the server's form decoding, which reads "+" as a space.
     private static let queryAllowed: CharacterSet = {

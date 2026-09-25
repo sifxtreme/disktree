@@ -21,6 +21,29 @@ Our additions:
 | `packaging/macos/{sign,install}.sh` | Signs both binaries, then installs the two agents. |
 | core: `ScanOptions::exclude`, `ScanOptions::fold_below`, `classify::MARKER_FILES` | `exclude` lists a directory without opening it. `fold_below` sums small files and small directory subtrees into one leaf (snapper peak 923 MB → 146 MB, totals exact), never folding the files classification reads (`Cargo.toml`, `package.json`, `HEAD`). |
 
+![The map: sections by kind of data, reclaimable space hatched, inspector with the selection, disk and 7 days of free space](assets/guilty-spark/map.png)
+
+![Clean up: safe to clear, growing fast, big and untouched, came back; each row offers Show in Finder and Copy Path](assets/guilty-spark/cleanup.png)
+
+## Using the app
+
+- **Map:** click a folder to go in; Back/Forward (⌘[ ⌘], Esc), Enclosing Folder (⌘↑, ⌫), or any
+  part of the path to come out. Right-click a tile for Open, Inspect, Show in Finder, Copy Path.
+  Colour by kind of data or by last write (Age). Hatching marks space that regenerates.
+- **Clean up (⌘2):** four ranked lists, each item with the reason and size. Suggestions only.
+- **Menu bar:** free space on every machine, and "Snapshot now".
+- Launch arguments (for screenshots and tests, never keystrokes): `-page "Clean up"`,
+  `-openPath <dir>`, `-appearance dark|light`, `-server <url>`.
+
+## UI harness
+
+`apps/mac/harness/run.sh` runs a second copy of the app that drives itself (`-harness YES`) through
+launch, click in/back/forward/up, Age colours, Clean up, every peer machine, dark mode and window
+sizes down to (and below) the minimum. It checks state after each step, asserts the server has no
+delete endpoint, measures memory (budget 150 MB), and takes window-only screenshots. `DISK_APP=<binary>`
+tests a build before installing. Bugs it found are listed in the commit history; the worst was an
+intermittent crash on resize inside the system `.inspector` column, now a plain panel.
+
 ## Where the data is
 
 `~/Library/Application Support/disk/disk.db` is on each machine. It is not synced (two writers on one
