@@ -40,23 +40,30 @@ struct MainWindow: View {
                 .pickerStyle(.segmented)
                 .frame(width: 200)
             }
-            ToolbarItem {
-                Picker("Colour by", selection: $model.mode) {
-                    ForEach(ColorMode.allCases) { Text($0.rawValue).tag($0) }
+            // Controls show only on the page they act on: colour and the side panel are the map's,
+            // a snapshot feeds the map and Clean up, and Memory has its own sampler.
+            ToolbarItemGroup {
+                if model.page == .map {
+                    Picker("Colour by", selection: $model.mode) {
+                        ForEach(ColorMode.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("Colour tiles by kind of data, or by last write")
                 }
-                .pickerStyle(.segmented)
-                .help("Colour tiles by kind of data, or by last write")
-                .disabled(model.page != .map)
-            }
-            ToolbarItem {
-                Button { model.snapshotNow() } label: { Label("Snapshot now", systemImage: "arrow.clockwise") }
-                    .disabled(model.current.status == nil || model.current.status?.scanning == true)
-                    .help(model.current.status?.scanning == true ? "A snapshot is running" : "Take a snapshot now (r)")
-            }
-            ToolbarItem {
-                Button { showInspector.toggle() } label: { Label("Inspector", systemImage: "sidebar.right") }
+                if model.page != .memory {
+                    Button { model.snapshotNow() } label: { Label("Snapshot now", systemImage: "arrow.clockwise") }
+                        .disabled(model.current.status == nil || model.current.status?.scanning == true)
+                        .help(model.current.status?.scanning == true ? "A snapshot is running" : "Take a snapshot now (r)")
+                }
+                if model.page == .map {
+                    Button { showInspector.toggle() } label: { Label("Inspector", systemImage: "sidebar.right") }
+                }
             }
         }
+        // One solid bar across the window. Without it the bar drew differently over the map and over
+        // the side panel (a scroll view), with a seam where they meet.
+        .toolbarBackground(Theme.bg, for: .windowToolbar)
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .overlay(alignment: .bottom) {
             if let toast = model.toast {
                 Text(toast).font(Theme.subhead)
