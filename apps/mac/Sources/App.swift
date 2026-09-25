@@ -17,6 +17,7 @@ struct GuiltySparkApp: App {
         Window("Guilty Spark", id: "main") {
             MainWindow()
                 .environmentObject(model)
+                .tint(Theme.accent)
                 .frame(minWidth: 900, minHeight: 580)
         }
         .defaultSize(width: 1380, height: 880)

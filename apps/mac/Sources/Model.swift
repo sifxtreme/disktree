@@ -67,9 +67,9 @@ final class SparkModel: ObservableObject {
     private var lastOthers = Date.distantPast
 
     var current: HostState { states[host] ?? HostState() }
-    var hostLabel: String { hosts.first { $0.id == host }?.label ?? host }
+    var hostLabel: String { label(host) }
 
-    func label(_ id: String) -> String { hosts.first { $0.id == id }?.label ?? id }
+    func label(_ id: String) -> String { hosts.first { $0.id == id }?.label ?? (id == "local" ? "This Mac" : id) }
 
     // MARK: lifecycle
 

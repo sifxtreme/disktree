@@ -53,7 +53,7 @@ struct MainWindow: View {
                 Button { model.openReview() } label: {
                     Text(model.current.marks.isEmpty ? "Review" : "Review \(model.current.marks.count) · \(bytes(model.markedBytes))")
                 }
-                .buttonStyle(.borderedProminent)
+                .modifier(ReviewStyle(active: !model.current.marks.isEmpty))
                 .disabled(model.current.marks.isEmpty)
                 .help("Review what is marked (c)")
             }
@@ -78,6 +78,19 @@ struct MainWindow: View {
     private var subtitle: String {
         guard let space = model.current.status?.space else { return "" }
         return "\(bytes(space.available)) free of \(bytes(space.total))"
+    }
+}
+
+/// Prominent glass only when there is something to review: a disabled prominent button on glass
+/// reads as a live, unreadable blue pill (DESIGN.md §5: one or two prominent buttons, accent only for state).
+struct ReviewStyle: ViewModifier {
+    let active: Bool
+    func body(content: Content) -> some View {
+        if active {
+            content.buttonStyle(.glassProminent).tint(Theme.accent)
+        } else {
+            content.buttonStyle(.glass)
+        }
     }
 }
 
