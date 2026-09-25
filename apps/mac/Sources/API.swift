@@ -108,6 +108,29 @@ struct GrowthDTO: Codable, Hashable {
     let baseAt: Int64?
 }
 
+struct SuggestItem: Codable, Hashable, Identifiable {
+    var id: String { path }
+    let path: String
+    let name: String
+    let bytes: Int64
+    let why: String
+    let markable: Bool
+    let category: String
+    let ageDays: Int64
+}
+
+struct SuggestSection: Codable, Hashable, Identifiable {
+    let id: String
+    let title: String
+    let detail: String
+    let bytes: Int64
+    let items: [SuggestItem]
+}
+
+struct SuggestDTO: Codable, Hashable {
+    let sections: [SuggestSection]
+}
+
 struct PlanTarget: Codable, Hashable, Identifiable {
     var id: String { path }
     let path: String

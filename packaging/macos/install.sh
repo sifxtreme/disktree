@@ -46,6 +46,11 @@ agent() {
 </plist>
 EOF
   launchctl bootout "gui/$uid/$1" 2>/dev/null || true
+  # bootout returns before a running job has exited; bootstrap fails (error 5) until it has.
+  for try in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl bootstrap "gui/$uid" "$agents/$1.plist" 2>/dev/null && return 0
+    sleep 1
+  done
   launchctl bootstrap "gui/$uid" "$agents/$1.plist"
 }
 

@@ -28,6 +28,15 @@ struct GuiltySparkApp: App {
                     .keyboardShortcut("k", modifiers: .command)
                 Button("Enclosing Folder") { model.up() }
                     .keyboardShortcut(.upArrow, modifiers: .command)
+                Button("Back") { model.goBack() }
+                    .keyboardShortcut("[", modifiers: .command)
+                Button("Forward") { model.goForward() }
+                    .keyboardShortcut("]", modifiers: .command)
+                Divider()
+                Button("Map") { model.page = .map }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button("Clean Up") { model.page = .cleanup }
+                    .keyboardShortcut("2", modifiers: .command)
             }
         }
 

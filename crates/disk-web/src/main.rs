@@ -282,6 +282,7 @@ fn poll(state: &mut State) {
     }
 
     let root = root_of(state).unwrap_or_default();
+    let state_dir = state.dir.clone();
     let mut finished = false;
     if let Some(job) = state.removal.as_mut()
         && let Some(handle) = job.handle.as_ref()
@@ -318,6 +319,7 @@ fn poll(state: &mut State) {
             }
         }
         if finished {
+            log_removals(&state_dir, job);
             job.handle = None;
         }
     }
@@ -435,6 +437,17 @@ fn local(
             let dir = guard.dir.clone();
             drop(guard);
             db_read(&dir, |db| store::growth(db, hours, 12))
+        }
+        (Method::Get, "suggest") => {
+            let (Some(tree), Some(meta)) = (guard.tree.clone(), guard.meta.clone()) else {
+                return (409, json!({"error": "no snapshot yet"}));
+            };
+            let dir = guard.dir.clone();
+            drop(guard);
+            let growing = store::open_read(&dir.join("disk.db"))
+                .and_then(|db| store::growth(&db, 24 * 7, 40))
+                .unwrap_or(Value::Null);
+            (200, suggest(&tree, &meta, &dir, &growing))
         }
         (Method::Get, "node") => {
             let Some(tree) = guard.tree.clone() else {
@@ -732,6 +745,195 @@ fn remove(state: &mut State, body: &Value, commit: bool) -> (u16, Value) {
         available_before,
     });
     (200, described)
+}
+
+/// Every removed path, appended once per finished removal. "Came back"
+/// reads it: a path deleted before and large again is a setting or a
+/// schedule to change, not a thing to delete by hand every month.
+fn log_removals(dir: &Path, job: &RemovalJob) {
+    use std::io::Write as _;
+    let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("removals.jsonl"))
+    else {
+        return;
+    };
+    for item in &job.items {
+        if item["error"].is_null() {
+            let line = json!({
+                "at": now(), "path": item["path"], "bytes": item["bytes"],
+                "mode": job.mode,
+            });
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
+/// Minimum sizes for a line in each Clean up section.
+const STALE_BYTES: u64 = 1_000_000_000;
+const STALE_DAYS: i64 = 180;
+const GROWING_BYTES: i64 = 200_000_000;
+const CAME_BACK_BYTES: u64 = 50_000_000;
+
+/// The Clean up view: four reasons a directory is worth deleting, each a
+/// separate list so the reason stays attached to the size.
+fn suggest(tree: &Node, meta: &store::Meta, dir: &Path, growing: &Value) -> Value {
+    let root = &meta.root;
+    let now = meta.taken_at;
+    let item = |path: &Path, node: &Node, why: String, markable: bool| {
+        json!({
+            "path": path.display().to_string(), "name": &*node.name,
+            "bytes": node.bytes, "why": why, "markable": markable,
+            "category": store::category_id(node.category),
+            "ageDays": if node.modified > 0 { (now - node.modified) / 86_400 } else { -1 },
+        })
+    };
+
+    let safe: Vec<Value> = worth_a_look(tree, now, 20)
+        .iter()
+        .filter_map(|c| {
+            let node = tree.resolve(&c.crumbs)?;
+            let path = disktree_core::tree::path_of(root, tree, &c.crumbs);
+            let (why, markable) = match &c.finding {
+                Finding::Reclaimable(r) => (reclaim_why(*r), true),
+                Finding::Worktrees { count, oldest_days } => {
+                    (format!("{count} agent worktrees, oldest {oldest_days} d"), false)
+                }
+                Finding::StaleExperiments { count } => {
+                    (format!("{count} experiments untouched 30+ d"), false)
+                }
+            };
+            Some(item(&path, node, why, markable))
+        })
+        .collect();
+
+    // Topmost stale directories: a stale parent's children are all stale
+    // too (its write time is the newest beneath it), so the parent is the
+    // one line that says it.
+    let mut stale = Vec::new();
+    let mut stack: Vec<(&Node, PathBuf, usize)> = tree
+        .children
+        .iter()
+        .map(|c| (c, root.join(&*c.name), 1))
+        .collect();
+    while let Some((node, path, depth)) = stack.pop() {
+        if !node.kind.is_dir() || node.bytes < STALE_BYTES {
+            continue;
+        }
+        let days = if node.modified > 0 { (now - node.modified) / 86_400 } else { -1 };
+        if days >= STALE_DAYS && node.reclaim.is_none() {
+            stale.push((node.bytes, item(&path, node, format!("no writes in {}", age_words(days)), true)));
+        } else if depth < 8 {
+            stack.extend(node.children.iter().map(|c| (c, path.join(&*c.name), depth + 1)));
+        }
+    }
+    stale.sort_by_key(|(b, _)| std::cmp::Reverse(*b));
+
+    let grew: Vec<Value> = growing["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|g| g["delta"].as_i64().unwrap_or(0) >= GROWING_BYTES)
+        .filter_map(|g| {
+            let path = PathBuf::from(g["path"].as_str()?);
+            let node = lookup(tree, root, &path)?;
+            let delta = g["delta"].as_i64()?;
+            (path != *root).then(|| {
+                item(&path, node, format!("+{} in 7 days", human(delta as u64)), true)
+            })
+        })
+        .collect();
+
+    let mut came_back = Vec::new();
+    if let Ok(text) = fs::read_to_string(dir.join("removals.jsonl")) {
+        let mut last: std::collections::BTreeMap<String, (i64, u64)> = Default::default();
+        for line in text.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+            if let (Some(p), Some(at)) = (v["path"].as_str(), v["at"].as_i64()) {
+                last.insert(p.to_string(), (at, v["bytes"].as_u64().unwrap_or(0)));
+            }
+        }
+        for (p, (at, was)) in last {
+            let path = PathBuf::from(&p);
+            if let Some(node) = lookup(tree, root, &path)
+                && node.bytes >= CAME_BACK_BYTES
+            {
+                let why = format!(
+                    "removed {} ago ({}), back to {}",
+                    age_words((now - at) / 86_400),
+                    human(was),
+                    human(node.bytes)
+                );
+                came_back.push(item(&path, node, why, true));
+            }
+        }
+    }
+
+    let section = |id: &str, title: &str, detail: &str, items: Vec<Value>| {
+        // A path inside another listed path goes with it: counted once.
+        let paths: Vec<String> =
+            items.iter().filter_map(|i| i["path"].as_str().map(String::from)).collect();
+        let items: Vec<Value> = items
+            .into_iter()
+            .filter(|i| {
+                let p = i["path"].as_str().unwrap_or_default();
+                !paths.iter().any(|q| p.starts_with(&format!("{q}/")))
+            })
+            .collect();
+        let bytes: u64 = items.iter().filter_map(|i| i["bytes"].as_u64()).sum();
+        json!({"id": id, "title": title, "detail": detail, "bytes": bytes, "items": items})
+    };
+    json!({"sections": [
+        section("safe", "Safe to clear",
+            "Caches, build output and package stores: whatever wrote them writes them again.", safe),
+        section("growing", "Growing fast",
+            "What gained the most in the last 7 days of snapshots.", grew),
+        section("stale", "Big and untouched",
+            "1 GB or more with no writes for 6 months. Archive it or let it go.",
+            stale.into_iter().take(15).map(|(_, v)| v).collect()),
+        section("cameBack", "Came back",
+            "Deleted here before and large again. A setting or a schedule fixes these better than you do.",
+            came_back),
+    ]})
+}
+
+/// What clearing it costs you, by why it is reclaimable. Only the first
+/// group truly comes back on its own.
+fn reclaim_why(reason: disktree_core::classify::Reclaim) -> String {
+    use disktree_core::classify::Reclaim;
+    match reason {
+        Reclaim::Regenerable => "cache: rebuilt on next use".into(),
+        Reclaim::BuildOutput => "build output: rebuilt on next build".into(),
+        Reclaim::PackageStore => "package store: re-downloaded when needed".into(),
+        Reclaim::Reinstallable => "dependencies: reinstall from the manifest".into(),
+        Reclaim::SandboxLayers => "container layers: pulled again when needed".into(),
+        Reclaim::SyncHistory => "old versions kept by a sync client".into(),
+        Reclaim::Trash => "already in a trash".into(),
+        Reclaim::Temporary => "scratch space".into(),
+        Reclaim::Snapshots => "snapshots: check they are not your only copy".into(),
+    }
+}
+
+fn age_words(days: i64) -> String {
+    match days {
+        d if d < 0 => "an unknown time".into(),
+        0 => "today".into(),
+        d if d < 60 => format!("{d} d"),
+        d if d < 730 => format!("{} months", d / 30),
+        d => format!("{:.1} years", d as f64 / 365.0),
+    }
+}
+
+fn human(bytes: u64) -> String {
+    let mut v = bytes as f64;
+    let mut unit = 0;
+    let units = ["B", "KB", "MB", "GB", "TB"];
+    while v >= 1000.0 && unit < units.len() - 1 {
+        v /= 1000.0;
+        unit += 1;
+    }
+    if v >= 100.0 || unit == 0 { format!("{v:.0} {}", units[unit]) } else { format!("{v:.1} {}", units[unit]) }
 }
 
 fn removal_status(state: &State) -> Value {

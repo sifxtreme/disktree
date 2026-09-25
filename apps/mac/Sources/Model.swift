@@ -1,6 +1,11 @@
 import Foundation
 import SwiftUI
 
+enum Page: String, CaseIterable, Identifiable {
+    case map = "Map", cleanup = "Clean up"
+    var id: String { rawValue }
+}
+
 enum ColorMode: String, CaseIterable, Identifiable {
     case kind = "Kind", age = "Age"
     var id: String { rawValue }
@@ -24,6 +29,10 @@ struct HostState {
     var selection: String?
     var marks: [String: Mark] = [:]
     var seenSnapshot: Int64 = 0
+    var suggest: SuggestDTO?
+    /// Folders visited, for Back and Forward (⌘[ ⌘]).
+    var back: [String] = []
+    var forward: [String] = []
 }
 
 enum ReviewStep { case choose, confirm, running, done }
@@ -48,6 +57,8 @@ final class SparkModel: ObservableObject {
     }
     @Published var states: [String: HostState] = [:]
     @Published var mode: ColorMode = .kind
+    // `-page "Clean up"` and `-openPath <dir>` at launch: screenshots and tests without keystrokes.
+    @Published var page: Page = Page(rawValue: UserDefaults.standard.string(forKey: "page") ?? "") ?? .map
     @Published var serverUp = true
     @Published var review: ReviewState?
     @Published var toast: String?
@@ -70,6 +81,10 @@ final class SparkModel: ObservableObject {
 
     private func loop() async {
         await loadHosts()
+        if let start = UserDefaults.standard.string(forKey: "openPath") {
+            await refresh(host)
+            open(start)
+        }
         while true {
             await refresh(host)
             if Date().timeIntervalSince(lastOthers) > 30 {
@@ -163,10 +178,12 @@ final class SparkModel: ObservableObject {
         async let insights: InsightsDTO? = try? API.get("api/h/\(id)/insights")
         async let history: HistoryDTO? = try? API.get("api/h/\(id)/history", ["days": "7"])
         async let growth: GrowthDTO? = try? API.get("api/h/\(id)/growth", ["hours": "24"])
-        let (i, h, g) = await (insights, history, growth)
+        async let suggest: SuggestDTO? = try? API.get("api/h/\(id)/suggest")
+        let (i, h, g, c) = await (insights, history, growth, suggest)
         states[id]?.insights = i?.items ?? []
         states[id]?.history = h?.points ?? []
         states[id]?.growth = g
+        states[id]?.suggest = c
     }
 
     static func index(_ root: NodeDTO) -> [String: NodeDTO] {
@@ -181,13 +198,47 @@ final class SparkModel: ObservableObject {
 
     // MARK: navigation
 
-    func open(_ path: String) { Task { await load(path: path, select: nil) } }
+    /// Go to a folder, remembering where we were for Back.
+    func open(_ path: String, select: String? = nil) {
+        if let here = current.node?.path, here != path {
+            states[host]?.back.append(here)
+            states[host]?.forward = []
+        }
+        Task { await load(path: path, select: select) }
+    }
 
-    func reveal(_ path: String) { Task { await load(path: parentOf(path), select: path) } }
+    func reveal(_ path: String) {
+        page = .map
+        open(parentOf(path), select: path)
+    }
 
     func up() {
         guard let node = current.node, let path = node.path, path != current.status?.root else { return }
-        Task { await load(path: parentOf(path), select: path) }
+        open(parentOf(path), select: path)
+    }
+
+    var canGoBack: Bool { !current.back.isEmpty }
+    var canGoForward: Bool { !current.forward.isEmpty }
+    var canGoUp: Bool { current.node?.path != nil && current.node?.path != current.status?.root }
+
+    func goBack() {
+        guard let to = states[host]?.back.popLast() else { return up() }
+        if let here = current.node?.path { states[host]?.forward.append(here) }
+        let from = current.node?.path
+        Task { await load(path: to, select: from.flatMap { $0.hasPrefix(to + "/") ? $0 : nil }) }
+    }
+
+    func goForward() {
+        guard let to = states[host]?.forward.popLast() else { return }
+        if let here = current.node?.path { states[host]?.back.append(here) }
+        Task { await load(path: to, select: nil) }
+    }
+
+    func markAll(_ items: [SuggestItem]) {
+        for i in items where i.markable && current.marks[i.path] == nil {
+            states[host]?.marks[i.path] = Mark(name: i.name, bytes: i.bytes)
+        }
+        saveMarks(host)
     }
 
     func select(_ path: String?) { states[host]?.selection = path }

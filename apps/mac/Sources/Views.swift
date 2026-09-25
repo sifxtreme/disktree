@@ -13,7 +13,7 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 224, max: 280)
         } detail: {
             Detail()
-                .inspector(isPresented: $showInspector) {
+                .inspector(isPresented: Binding(get: { showInspector && model.page == .map }, set: { showInspector = $0 })) {
                     Inspector()
                         .inspectorColumnWidth(min: 280, ideal: 330, max: 440)
                 }
@@ -21,12 +21,28 @@ struct MainWindow: View {
         .navigationTitle(model.hostLabel)
         .navigationSubtitle(subtitle)
         .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button { model.goBack() } label: { Label("Back", systemImage: "chevron.left") }
+                    .disabled(!model.canGoBack && !model.canGoUp)
+                    .help("Back (⌘[ or Esc)")
+                Button { model.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
+                    .disabled(!model.canGoForward)
+                    .help("Forward (⌘])")
+            }
+            ToolbarItem(placement: .principal) {
+                Picker("View", selection: $model.page) {
+                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+            }
             ToolbarItem {
                 Picker("Colour by", selection: $model.mode) {
                     ForEach(ColorMode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .help("Colour tiles by kind of data, or by last write")
+                .disabled(model.page != .map)
             }
             ToolbarItem {
                 Button { model.snapshotNow() } label: { Label("Snapshot now", systemImage: "arrow.clockwise") }
@@ -149,22 +165,28 @@ struct Detail: View {
     @EnvironmentObject var model: SparkModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            Trail()
-            Verdict()
-            Legend()
-            Group {
-                if let node = model.current.node {
-                    TreemapView(node: node)
-                } else {
-                    EmptyMap()
+        Group {
+            if model.page == .cleanup {
+                CleanupView()
+            } else {
+                VStack(alignment: .leading, spacing: Theme.Space.md) {
+                    Verdict()
+                    Trail()
+                    Group {
+                        if let node = model.current.node {
+                            TreemapView(node: node)
+                        } else {
+                            EmptyMap()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Legend()
                 }
+                .padding(.horizontal, Theme.Space.xl)
+                .padding(.top, Theme.Space.lg)
+                .padding(.bottom, Theme.Space.lg)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.horizontal, Theme.Space.xl)
-        .padding(.top, Theme.Space.md)
-        .padding(.bottom, Theme.Space.xl)
         .background(Theme.bg)
     }
 }
@@ -174,7 +196,16 @@ struct Trail: View {
 
     var body: some View {
         let s = model.current
-        HStack(spacing: 2) {
+        HStack(spacing: 4) {
+            if model.canGoUp {
+                Button { model.up() } label: {
+                    Image(systemName: "arrow.up.left").font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .background(Theme.surface2, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Enclosing folder (⌫)")
+            }
             if let node = s.node, let trail = node.trail, let root = s.status?.root {
                 ForEach(Array(trail.enumerated()), id: \.offset) { i, step in
                     if i > 0 { Text("›").foregroundStyle(Theme.faint) }
@@ -184,7 +215,7 @@ struct Trail: View {
                         model.open(path)
                     } label: {
                         Text(i == 0 ? (root.hasPrefix("/Users/") && root.split(separator: "/").count == 2 ? "~" : baseName(root)) : step.name)
-                            .font(last ? Theme.title : Theme.subhead)
+                            .font(last ? Theme.headline : Theme.subhead)
                             .foregroundStyle(last ? Theme.ink : Theme.muted)
                             .lineLimit(1)
                     }
@@ -206,43 +237,63 @@ struct Verdict: View {
         let s = model.current
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             if s.error != nil {
-                Text("\(model.hostLabel) is not answering.").font(Theme.headline)
+                Text("\(model.hostLabel) is not answering.").font(Theme.title)
             } else if let st = s.status, let space = st.space {
-                let look = s.insights.filter(\.markable).reduce(Int64(0)) { $0 + $1.bytes }
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("\(bytes(space.available)) free").font(Theme.headline)
-                    Text("of \(bytes(space.total)) on \(model.hostLabel).").font(Theme.callout)
-                    if look > 0 { Text("\(bytes(look)) looks reclaimable.").font(Theme.callout) }
-                    if let t = st.tree { Text("\(st.root) holds \(bytes(t.bytes)).").font(Theme.subhead).foregroundStyle(Theme.muted) }
-                }
-                if st.fullDiskAccess == false {
-                    PartialBanner(excluded: st.excluded ?? [])
+                let safe = s.suggest?.sections.first { $0.id == "safe" }?.bytes ?? 0
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(bytes(space.available)).font(.system(size: 30, weight: .bold)).monospacedDigit()
+                    Text("free of \(bytes(space.total))").font(Theme.callout).foregroundStyle(Theme.muted)
+                    if safe > 0 {
+                        Button { model.page = .cleanup } label: {
+                            Text("\(bytes(safe)) safe to clear →").font(Theme.callout.weight(.medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accent)
+                    }
+                    Spacer()
+                    if st.fullDiskAccess == false {
+                        PartialBadge(excluded: st.excluded ?? [])
+                    }
                 }
             }
         }
     }
 }
 
-struct PartialBanner: View {
+/// One quiet line for a partial snapshot; the detail is a click away (onion).
+struct PartialBadge: View {
     let excluded: [String]
+    @State private var open = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "lock.shield").foregroundStyle(Theme.warn)
-            (Text("Partial snapshot. ").bold()
-             + Text("No Full Disk Access, so these were skipped rather than raise a dialog: \(excluded.map(baseName).joined(separator: ", ")). Grant it to ")
-             + Text("~/.local/bin/disk-snap").font(Theme.codeCaption)
-             + Text(" in Privacy & Security › Full Disk Access."))
-                .font(Theme.caption)
-            Spacer(minLength: 0)
-            Button("Open Settings") {
-                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")!)
+        Button { open.toggle() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "lock.shield")
+                Text("Partial · \(excluded.count) folders skipped")
             }
-            .controlSize(.small)
+            .font(Theme.caption.weight(.medium))
+            .foregroundStyle(Theme.warn)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Theme.warn.opacity(0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.warn.opacity(0.3), lineWidth: 0.5))
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(Theme.warn.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).strokeBorder(Theme.warn.opacity(0.4), lineWidth: 0.5))
+        .buttonStyle(.plain)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Partial snapshot").font(Theme.headline)
+                Text("disk-snap has no Full Disk Access, so it skipped these rather than raise a dialog every hour:")
+                    .font(Theme.subhead).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                Text(excluded.map(baseName).joined(separator: ", ")).font(Theme.subhead)
+                Text("Grant it to ~/.local/bin/disk-snap in Privacy & Security › Full Disk Access.")
+                    .font(Theme.caption).foregroundStyle(Theme.muted)
+                Button("Open Full Disk Access Settings") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")!)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(16)
+            .frame(width: 340)
+        }
     }
 }
 
@@ -250,7 +301,7 @@ struct Legend: View {
     @EnvironmentObject var model: SparkModel
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             if model.mode == .age {
                 ForEach([("this week", 0.72), ("this month", 0.52), ("6 months", 0.34), ("a year", 0.20), ("older", 0.09)], id: \.0) { label, mix in
                     swatch(Theme.surface.mix(with: Theme.accent, by: mix), label)
